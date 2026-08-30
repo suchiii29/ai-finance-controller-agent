@@ -6,7 +6,8 @@ from time import perf_counter
 from typing import Any, Callable
 
 from langchain_core.messages import ToolMessage
-from langchain_ollama import ChatOllama
+
+from app.llm import get_llm, is_llm_available
 
 from app.models import BatchControllerReport, ControllerOutcome, ControllerResponse, ControllerStatus
 from app.tools import (
@@ -54,20 +55,14 @@ taken. Unknown root causes must remain unknown.
 
 
 logger = logging.getLogger(__name__)
-_local_llm = None
 
 
 def get_local_llm():
-    global _local_llm
-    if _local_llm is None:
-        started = perf_counter()
-        _local_llm = ChatOllama(
-            model="qwen2.5:3b",
-            temperature=0.1,
-            request_timeout=MODEL_TIMEOUT_SECONDS,
-        )
-        logger.info("controller model initialization took %.3fs", perf_counter() - started)
-    return _local_llm
+    """Return the centralized LLM instance or raise if unavailable."""
+    llm = get_llm()
+    if llm is None:
+        raise RuntimeError("LLM provider is not available")
+    return llm
 
 
 def _tool_description(name: str, function: Callable[..., Any]) -> Callable[..., Any]:
@@ -348,34 +343,57 @@ def run_batch_controller() -> BatchControllerReport:
         "get_reconciliation_summary",
         f"{reconciled} reconciled, {escalated} escalated",
     )
-    llm_requested = os.getenv("FINANCE_CONTROLLER_ENABLE_LLM") == "1"
-    ai_available = False
+    # ── AI exception investigation ──────────────────────────────
+    ai_available = is_llm_available()
     fallback_used = False
     llm_calls = 0
-    ai_tool_calls = 0
-    if llm_requested:
-        ai_review = run_controller_agent(
-            "Prioritize the already observed batch exceptions and decide whether further read-only evidence is useful.",
-            max_tool_calls=2,
+    exception_explanations: dict[str, dict[str, Any]] = {}
+
+    if ai_available and priority:
+        from app.investigation import explain_exception_evidence
+
+        event(
+            "INVESTIGATING",
+            "AI investigating escalated exceptions using structured evidence.",
+            tool="explain_exception_evidence",
         )
-        llm_calls = int(ai_review.timings.get("llm_calls", 0))
-        ai_tool_calls = len(ai_review.controller.tools_used)
-        ai_available = not any("unavailable" in item.lower() for item in ai_review.activity_trace)
-        fallback_used = not ai_available
+        for incident in priority[:8]:
+            exc_id = incident["exception_id"]
+            try:
+                explanation = explain_exception_evidence(incident)
+                exception_explanations[exc_id] = explanation
+                llm_calls += 1
+            except Exception as exc:
+                logger.warning("AI explanation failed for %s: %s", exc_id, exc)
+                exception_explanations[exc_id] = {
+                    "available": False,
+                    "fallback_reason": "AI investigation unavailable — deterministic evidence remains available.",
+                }
+                fallback_used = True
+
         event(
             "ANALYZING",
-            "Optional bounded AI review completed without changing deterministic decisions.",
-            outcome="available" if ai_available else "failed safe; deterministic report retained",
+            f"AI investigated {len(exception_explanations)} exceptions without changing deterministic decisions.",
+            outcome=f"{llm_calls} AI calls succeeded" if llm_calls else "AI unavailable; deterministic report retained",
         )
+    elif not ai_available:
+        fallback_used = True
+        event(
+            "ANALYZING",
+            "AI provider unavailable — deterministic evidence report retained.",
+            outcome="fallback",
+        )
+
     if priority:
         event("NEEDS_HUMAN_REVIEW", "Preserved unresolved incidents for finance operators.", outcome=f"{len(priority)} incidents")
     else:
         event("COMPLETED", "Completed batch with no unresolved incidents.")
 
     total_seconds = perf_counter() - started
-    records_processed = get_reconciliation_result().records_processed
+    rec_result = get_reconciliation_result()
+    records_processed = rec_result.records_processed
     return BatchControllerReport(
-        run_id=get_reconciliation_result().run_id,
+        run_id=rec_result.run_id,
         status=status,
         records_processed=records_processed,
         total_cases=total_cases,
@@ -389,6 +407,8 @@ def run_batch_controller() -> BatchControllerReport:
                 "severity": incident["severity"],
                 "reason": incident["reason"],
                 "references": incident["references"],
+                "affected_orders": incident.get("affected_orders", []),
+                "ai_investigation": exception_explanations.get(incident["exception_id"]),
             }
             for incident in priority
         ],
@@ -398,8 +418,9 @@ def run_batch_controller() -> BatchControllerReport:
             "controller_total_seconds": total_seconds,
             "records_per_second": records_processed / max(total_seconds, 0.0001),
         },
+        throughput=rec_result.throughput,
         llm_calls=llm_calls,
-        tool_calls=2 + ai_tool_calls,
+        tool_calls=2 + llm_calls,
         ai_available=ai_available,
         fallback_used=fallback_used,
         financial_action_taken=False,

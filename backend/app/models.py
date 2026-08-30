@@ -96,6 +96,7 @@ class BatchControllerReport(BaseModel):
     unresolved_exceptions: list[dict[str, Any]] = Field(default_factory=list)
     activity_trace: list[dict[str, Any]] = Field(default_factory=list)
     timings: dict[str, float] = Field(default_factory=dict)
+    throughput: dict[str, float] = Field(default_factory=dict)
     llm_calls: int = 0
     tool_calls: int = 0
     ai_available: bool = False

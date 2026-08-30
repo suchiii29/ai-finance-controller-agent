@@ -9,9 +9,16 @@ from app.investigation import investigate_and_explain_highest_priority
 from app.evaluation import evaluate_batch, load_ground_truth
 app = FastAPI(title="AI Finance Controller Agent")
 
+import os
+
+cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
+origins = [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
+if "*" in origins:
+    origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=origins if origins != ["*"] else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

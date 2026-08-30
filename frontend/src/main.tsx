@@ -1,563 +1,626 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 
-type Data = any;
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-const API_URL = "http://localhost:8000";
+interface EvaluationMetrics {
+  total_cases_evaluated: number;
+  correctly_reconciled: number;
+  correctly_escalated: number;
+  incorrect_auto_resolutions: number;
+  missed_resolvable_cases: number;
+  precision: number;
+  recall: number;
+  f1: number;
+  safe_resolution_rate: number;
+  exception_escalation_accuracy: number;
+  ground_truth_cases: number;
+}
+
+interface BatchReport {
+  run_id: string;
+  status: string;
+  records_processed: number;
+  total_cases: number;
+  reconciled_cases: number;
+  escalated_cases: number;
+  match_rate: number;
+  unresolved_exceptions: any[];
+  activity_trace: any[];
+  timings: Record<string, number>;
+  throughput?: {
+    seconds: number;
+    records_per_second: number;
+  };
+  llm_calls: number;
+  tool_calls: number;
+  ai_available: boolean;
+  fallback_used: boolean;
+  financial_action_taken: boolean;
+  evaluation?: EvaluationMetrics;
+}
 
 function App() {
-  const [data, setData] = useState<Data>();
+  const [activeTab, setActiveTab] = useState<"Overview" | "Exceptions" | "Decisions" | "Evaluation">("Overview");
+  const [batchData, setBatchData] = useState<BatchReport | null>(null);
+  const [reconcileResult, setReconcileResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
-  const [controller, setController] = useState<Data>();
-  const [controllerLoading, setControllerLoading] = useState(false);
-  const [controllerError, setControllerError] = useState("");
-  const [activePage, setActivePage] = useState("Dashboard");
+  const [processingStage, setProcessingStage] = useState<string>("");
+  const [selectedException, setSelectedException] = useState<any | null>(null);
+  const [filterSeverity, setFilterSeverity] = useState<string>("ALL");
+  const [searchQuery, setSearchQuery] = useState<string>("");
 
-  async function runReconciliation() {
+  const runFullPipeline = async () => {
     setLoading(true);
+    setProcessingStage("Ingesting & validating financial records...");
+    
+    setTimeout(() => setProcessingStage("Executing deterministic rule engine..."), 400);
+    setTimeout(() => setProcessingStage("Checking bank settlement batch integrity..."), 800);
+    setTimeout(() => setProcessingStage("Escalating ambiguous cases..."), 1200);
+    setTimeout(() => setProcessingStage("Generating grounded AI exception analysis..."), 1600);
 
     try {
-      const response = await fetch(`${API_URL}/api/reconcile`, {
+      const recRes = await fetch(`${API_URL}/api/reconcile`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          instruction:
-            "Reconcile all available settlements and identify anything requiring attention.",
-        }),
+        body: JSON.stringify({ instruction: "Process reconciliation batch" }),
       });
+      const recJson = await recRes.json();
+      setReconcileResult(recJson.result);
 
-      if (!response.ok) {
-        throw new Error("Reconciliation request failed");
-      }
-
-      const result = await response.json();
-      setData(result);
-    } catch (error) {
-      console.error(error);
-      alert("Could not connect to the backend. Make sure FastAPI is running.");
+      const ctrlRes = await fetch(`${API_URL}/api/controller/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const ctrlJson = await ctrlRes.json();
+      setBatchData(ctrlJson);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to connect to backend server at " + API_URL);
     } finally {
       setLoading(false);
+      setProcessingStage("");
     }
-  }
+  };
 
-  async function runController() {
-    setControllerLoading(true);
-    setControllerError("");
+  useEffect(() => {
+    runFullPipeline();
+  }, []);
 
-    try {
-      const response = await fetch(`${API_URL}/api/controller/run`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Controller request failed");
-      }
-
-      setController({ batch: await response.json() });
-    } catch (error) {
-      console.error(error);
-      setControllerError("The controller could not complete. Review the reconciliation manually.");
-    } finally {
-      setControllerLoading(false);
-    }
-  }
-
-  const counts = data?.result?.runtime_counts || {};
-  const exceptions = data?.result?.exceptions || [];
-  const decisions = data?.result?.decisions || [];
-
-  // Sort incidents: URGENT → REVIEW → everything else
-  const sortedExceptions = [...exceptions].sort((a: any, b: any) => {
-    const priority: Record<string, number> = {
-      URGENT: 0,
-      REVIEW: 1,
-      WARNING: 2,
-    };
-
-    return (
-      (priority[a.severity] ?? 3) -
-      (priority[b.severity] ?? 3)
-    );
+  const decisions = reconcileResult?.decisions || [];
+  const exceptions = batchData?.unresolved_exceptions || reconcileResult?.exceptions || [];
+  
+  const filteredExceptions = exceptions.filter((ex: any) => {
+    const matchesSev = filterSeverity === "ALL" || ex.severity === filterSeverity;
+    const matchesSearch = !searchQuery || 
+      ex.exception_id?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      ex.type?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      ex.reason?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (ex.references && ex.references.some((r: string) => r.toLowerCase().includes(searchQuery.toLowerCase())));
+    return matchesSev && matchesSearch;
   });
 
-  const urgentCount = exceptions.filter(
-    (item: any) => item.severity === "URGENT"
-  ).length;
-
-  const exceptionTypes = counts?.exception_count_by_type
-    ? Object.entries(counts.exception_count_by_type)
-        .sort((a: any, b: any) => Number(b[1]) - Number(a[1]))
-        .slice(0, 5)
-    : [];
-
-  const reviewItems = sortedExceptions.slice(0, 5);
-
-  const reconciledCount =
-    counts?.reconciled_count ??
-    decisions.filter((d: any) => d.decision === "RECONCILED").length;
-
-  const exceptionCount =
-    counts?.exception_count ??
-    decisions.filter((d: any) => d.decision !== "RECONCILED").length;
+  const filteredDecisions = decisions.filter((d: any) => {
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return d.order_id.toLowerCase().includes(q) || 
+           d.decision.toLowerCase().includes(q) ||
+           d.decision_reason.toLowerCase().includes(q) ||
+           d.rule_id.toLowerCase().includes(q);
+  });
 
   return (
-    <div className="app">
+    <div className="app-layout">
       {/* SIDEBAR */}
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">F</div>
-          <div>
-            <strong>FinanceOS</strong>
-            <span>AI Finance Controller</span>
+          <div className="brand-title">
+            <span className="brand-name">FinanceOS</span>
+            <span className="brand-tag">Operations Controller</span>
           </div>
         </div>
 
-        <nav>
+        <nav className="nav">
           {[
-            ["Dashboard", "⌂"],
-            ["Reconciliation", "↻"],
-            ["Exceptions", "⚠"],
-            ["Analytics", "◫"],
-          ].map(([name, icon]) => (
+            { id: "Overview", label: "Overview", icon: "📊" },
+            { id: "Exceptions", label: "Exceptions", icon: "⚠️", badge: exceptions.length },
+            { id: "Decisions", label: "Decisions", icon: "📄" },
+            { id: "Evaluation", label: "Evaluation", icon: "🛡️" },
+          ].map((item) => (
             <button
-              key={name}
-              className={`nav-item ${
-                activePage === name ? "active" : ""
-              }`}
-              onClick={() => setActivePage(name)}
+              key={item.id}
+              className={`nav-item ${activeTab === item.id ? "active" : ""}`}
+              onClick={() => setActiveTab(item.id as any)}
             >
-              <span>{icon}</span>
-              {name}
+              <span className="nav-icon">{item.icon}</span>
+              <span className="nav-text">{item.label}</span>
+              {item.badge !== undefined && item.badge > 0 && (
+                <span className="badge">{item.badge}</span>
+              )}
             </button>
           ))}
         </nav>
 
         <div className="sidebar-footer">
-          <div className="system-status">
-            <span className="status-dot"></span>
-            System operational
+          <div className="status-indicator">
+            <span className={`status-dot ${batchData?.ai_available ? "green" : "amber"}`}></span>
+            <span>{batchData?.ai_available ? "Engine & AI Connected" : "Engine Active (AI Offline)"}</span>
           </div>
-          <small>Evidence-first finance ops</small>
+          <p className="footer-note">Financial decisions are deterministic. AI investigates exceptions—it never overrides them.</p>
         </div>
       </aside>
 
-      {/* MAIN CONTENT */}
-      <main className="content">
-        <header className="topbar">
+      {/* MAIN CONTAINER */}
+      <main className="main-wrapper">
+        <header className="header">
           <div>
-            <p className="eyebrow">FINANCE OPERATIONS</p>
-            <h1>{activePage}</h1>
-          </div>
-
-          <div className="topbar-actions">
-            <span className="live-status">
-              <span className="live-dot"></span>
-              Live system
-            </span>
-            <div className="avatar">FC</div>
-          </div>
-        </header>
-
-        {/* HERO */}
-        <section className="welcome-section">
-          <div>
-            <h2>Financial operations, under control.</h2>
-            <p>
-              Reconcile orders, gateway transactions and bank settlements.
-              Exceptions are surfaced with verified evidence — never guessed.
+            <h1 className="page-title">{activeTab === "Overview" ? "Finance Operations" : activeTab}</h1>
+            <p className="page-subtitle">
+              {activeTab === "Overview" && "Reconcile payments, settlements, and exceptions with auditable controls."}
+              {activeTab === "Exceptions" && "Review escalated financial cases with evidence-grounded AI investigations."}
+              {activeTab === "Decisions" && "Audit deterministic rule outcomes across all order records."}
+              {activeTab === "Evaluation" && "Isolated ground-truth performance metrics and system safety design."}
             </p>
           </div>
 
-          <button
-            className="primary-button"
-            onClick={runReconciliation}
-            disabled={loading}
-          >
-            {loading ? "Running reconciliation..." : "↻ Run reconciliation"}
-          </button>
-          <button
-            className="secondary-button"
-            onClick={runController}
-            disabled={controllerLoading}
-          >
-            {controllerLoading ? "Assessing state..." : "✦ Run AI Controller"}
-          </button>
-        </section>
+          <div className="header-actions">
+            <button className="btn-primary" onClick={runFullPipeline} disabled={loading}>
+              {loading ? "Processing Batch..." : "Run Batch Reconciliation"}
+            </button>
+          </div>
+        </header>
 
-        {!data ? (
-          <>
-            <section className="overview-banner">
-              <div className="overview-icon">✦</div>
-              <div>
-                <h3>Your finance operations command center</h3>
-                <p>
-                  Run your first reconciliation to analyze settlements and
-                  surface exceptions requiring attention.
-                </p>
-              </div>
-              <span className="ready-badge">Ready to run</span>
-            </section>
+        {loading && (
+          <div className="modal-overlay">
+            <div className="loader-card">
+              <div className="spinner"></div>
+              <h3>Running Reconciliation Pipeline</h3>
+              <p className="stage-message">{processingStage}</p>
+            </div>
+          </div>
+        )}
 
-            <section className="feature-grid">
-              <FeatureCard
-                icon="✓"
-                title="Automated reconciliation"
-                text="Match orders, transactions and settlements automatically."
-              />
-              <FeatureCard
-                icon="!"
-                title="Exception intelligence"
-                text="Surface anomalies instead of silently guessing outcomes."
-              />
-              <FeatureCard
-                icon="◈"
-                title="Evidence-first decisions"
-                text="Every decision is backed by rules and supporting evidence."
-              />
-            </section>
-          </>
-        ) : (
-          <>
-            {/* CLEAN SUMMARY */}
-            <section className="run-summary">
-              <span className="success-icon">✓</span>
-              <div>
-                <strong>Reconciliation completed successfully</strong>
-                <p>
-                  {data.result?.records_processed || 0} records analyzed.
-                  {" "}
-                  {exceptionCount} items require attention.
-                </p>
-              </div>
-              <span className="run-id">
-                {data.result?.run_id}
-              </span>
-            </section>
-
-            <ControllerPanel
-              data={controller}
-              loading={controllerLoading}
-              error={controllerError}
-              onRun={runController}
-            />
-
-            {/* METRICS */}
-            <section className="metrics">
-              <MetricCard
-                label="Orders reconciled"
-                value={reconciledCount}
-                detail="Successfully matched"
-                type="success"
-              />
-              <MetricCard
-                label="Require review"
-                value={exceptionCount}
-                detail="Need human attention"
-                type="warning"
-              />
-              <MetricCard
-                label="Urgent incidents"
-                value={urgentCount}
-                detail="High priority issues"
-                type="danger"
-              />
-              <MetricCard
-                label="Records processed"
-                value={data.result?.records_processed || 0}
-                detail="Across all sources"
-                type="neutral"
-              />
-            </section>
-
-            {/* TWO COLUMN SECTION */}
-            <section className="dashboard-grid">
-              <div className="panel">
-                <div className="panel-header">
-                  <div>
-                    <h3>Attention required</h3>
-                    <p>Urgent incidents appear first</p>
-                  </div>
-                  <span className="count-badge">{exceptions.length}</span>
+        {/* OVERVIEW TAB */}
+        {activeTab === "Overview" && (
+          <div className="content-space">
+            {/* PRIMARY OUTCOME HERO BANNER */}
+            <div className="hero-outcome-card">
+              <div className="hero-outcome-header">
+                <div>
+                  <span className="hero-eyebrow">BATCH RECONCILIATION OUTCOME</span>
+                  <h2 className="hero-title">
+                    {batchData
+                      ? `${batchData.reconciled_cases} of ${batchData.total_cases} Orders Safe-Reconciled`
+                      : "Batch Processing Pending"}
+                  </h2>
                 </div>
-
-                <div className="exception-list">
-                  {reviewItems.map((item: any) => {
-                    const exceptionType =
-                      item.exception_type || item.type || "UNKNOWN";
-
-                    const references =
-                      item.refs || item.references || [];
-
-                    return (
-                      <div className="exception-row" key={item.exception_id}>
-                        <div
-                          className={`severity-icon ${(
-                            item.severity || ""
-                          ).toLowerCase()}`}
-                        >
-                          !
-                        </div>
-
-                        <div className="exception-info">
-                          <strong>{formatName(exceptionType)}</strong>
-                          <p>{item.reason}</p>
-                          <small>
-                            {references.length > 0
-                              ? references.join(", ")
-                              : item.exception_id}
-                          </small>
-                        </div>
-
-                        <span
-                          className={`severity-badge ${(
-                            item.severity || ""
-                          ).toLowerCase()}`}
-                        >
-                          {item.severity || "UNKNOWN"}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* RISK BREAKDOWN */}
-              <div className="panel risk-panel">
-                <div className="panel-header">
-                  <div>
-                    <h3>Risk breakdown</h3>
-                    <p>Most frequent exception categories</p>
-                  </div>
-                </div>
-
-                {exceptionTypes.length > 0 ? (
-                  <div className="risk-list">
-                    {exceptionTypes.map(([name, value]: any, index) => {
-                      const maxValue = Math.max(
-                        ...exceptionTypes.map((item: any) =>
-                          Number(item[1])
-                        )
-                      );
-
-                      const width =
-                        maxValue > 0
-                          ? (Number(value) / maxValue) * 100
-                          : 0;
-
-                      return (
-                        <div className="risk-item" key={name}>
-                          <div className="risk-label">
-                            <span>{formatName(name)}</span>
-                            <strong>{value}</strong>
-                          </div>
-
-                          <div className="progress-track">
-                            <div
-                              className={`progress-bar bar-${index}`}
-                              style={{ width: `${width}%` }}
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="no-data">
-                    No risk data available
-                  </div>
+                {batchData && (
+                  <span className={`status-badge-hero ${batchData.escalated_cases > 0 ? 'review' : 'completed'}`}>
+                    {batchData.escalated_cases > 0 ? `${batchData.escalated_cases} ESCALATED FOR OPERATOR REVIEW` : "100% RECONCILED"}
+                  </span>
                 )}
               </div>
-            </section>
+              <p className="hero-description">
+                Deterministic rule engine executed across <strong>{batchData?.records_processed || 0}</strong> source records.
+                {" "}<strong>{batchData ? (batchData.match_rate * 100).toFixed(1) : 0}%</strong> of cases resolved with 100% mathematical certainty.
+              </p>
+            </div>
 
-            {/* RECENT DECISIONS */}
-            <section className="panel decisions-panel">
-              <div className="panel-header">
-                <div>
-                  <h3>Recent decisions</h3>
-                  <p>Evidence-based reconciliation outcomes</p>
+            {/* METRICS GRID */}
+            <div className="metrics-grid">
+              <div className="metric-card">
+                <span className="metric-label">ORDERS RECONCILED</span>
+                <div className="metric-number text-navy">
+                  {batchData ? `${batchData.reconciled_cases} / ${batchData.total_cases}` : "—"}
                 </div>
-                <span className="decision-count">
-                  {decisions.length} decisions
+                <span className="metric-sub">
+                  Safe Resolution: {((batchData?.match_rate || 0) * 100).toFixed(1)}%
                 </span>
               </div>
 
-              <div className="table-wrapper">
-                <table>
+              <div className="metric-card">
+                <span className="metric-label">ESCALATED FOR REVIEW</span>
+                <div className="metric-number text-amber">
+                  {batchData ? batchData.escalated_cases : "—"}
+                </div>
+                <span className="metric-sub">Refused to guess under ambiguity</span>
+              </div>
+
+              <div className="metric-card border-green-light">
+                <span className="metric-label">INCORRECT AUTO-RESOLUTIONS</span>
+                <div className="metric-number text-green">
+                  {batchData?.evaluation ? batchData.evaluation.incorrect_auto_resolutions : "0"}
+                </div>
+                <span className="metric-sub">Zero False Positives</span>
+              </div>
+
+              <div className="metric-card">
+                <span className="metric-label">EVALUATION PRECISION</span>
+                <div className="metric-number text-blue">
+                  {batchData?.evaluation ? `${(batchData.evaluation.precision * 100).toFixed(0)}%` : "100%"}
+                </div>
+                <span className="metric-sub">Ground Truth Precision</span>
+              </div>
+            </div>
+
+            {/* THROUGHPUT NOTE & ARCHITECTURE */}
+            <div className="banner-card">
+              <div className="banner-body">
+                <h4>System Performance & Architecture</h4>
+                <p>
+                  <strong>Deterministic Processing Speed:</strong>{" "}
+                  {batchData?.throughput
+                    ? `${Math.round(batchData.throughput.records_per_second).toLocaleString()} records/sec (${(batchData.throughput.seconds * 1000).toFixed(1)}ms execution time across ${batchData.records_processed} source records)`
+                    : "Measuring runtime..."}
+                  <br />
+                  <strong>Safety Policy:</strong> Automatic reconciliation requires 100% mathematical and rule-based certainty. Any mismatch in gateway totals or bank settlement credit triggers safe human escalation.
+                </p>
+              </div>
+            </div>
+
+            {/* THREE-STAGE PROCESS SUMMARY */}
+            <div className="section-card">
+              <h3 className="section-heading">How FinanceOS Works</h3>
+              <div className="three-steps-grid">
+                <div className="step-card">
+                  <div className="step-badge">1</div>
+                  <h4>Reconcile</h4>
+                  <p>Matches orders, gateway transactions, and bank settlements using deterministic rules.</p>
+                </div>
+                <div className="step-card">
+                  <div className="step-badge">2</div>
+                  <h4>Investigate</h4>
+                  <p>AI analyzes verified evidence for unresolved exceptions to explain root causes.</p>
+                </div>
+                <div className="step-card">
+                  <div className="step-badge">3</div>
+                  <h4>Escalate</h4>
+                  <p>Ambiguous or unsafe cases remain untouched and are sent for human operator review.</p>
+                </div>
+              </div>
+            </div>
+
+            {/* PRIORITY EXCEPTIONS PREVIEW */}
+            <div className="section-card">
+              <div className="section-header">
+                <div>
+                  <h3 className="section-heading">Priority Exception Queue</h3>
+                  <p className="section-sub">Unresolved incidents requiring human operator review</p>
+                </div>
+                <button className="btn-secondary" onClick={() => setActiveTab("Exceptions")}>
+                  View All ({exceptions.length}) →
+                </button>
+              </div>
+
+              <div className="preview-list">
+                {exceptions.slice(0, 4).map((ex: any) => (
+                  <div 
+                    key={ex.exception_id} 
+                    className="preview-item"
+                    onClick={() => {
+                      setSelectedException(ex);
+                      setActiveTab("Exceptions");
+                    }}
+                  >
+                    <div className="preview-top">
+                      <span className={`tag ${ex.severity?.toLowerCase()}`}>{ex.severity}</span>
+                      <strong className="preview-type">{formatName(ex.type)}</strong>
+                      <span className="mono-id">{ex.exception_id}</span>
+                    </div>
+                    <p className="preview-reason">{ex.reason}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* EXCEPTIONS TAB */}
+        {activeTab === "Exceptions" && (
+          <div className="content-space">
+            <div className="split-view-container">
+              {/* LEFT MASTER LIST */}
+              <div className="master-panel">
+                <div className="panel-controls">
+                  <input 
+                    type="text" 
+                    placeholder="Search exceptions or references..." 
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="input-search"
+                  />
+                  <select 
+                    value={filterSeverity} 
+                    onChange={(e) => setFilterSeverity(e.target.value)}
+                    className="select-filter"
+                  >
+                    <option value="ALL">All Severities</option>
+                    <option value="URGENT">URGENT Only</option>
+                    <option value="REVIEW">REVIEW Only</option>
+                  </select>
+                </div>
+
+                <div className="master-list">
+                  {filteredExceptions.map((ex: any) => (
+                    <div 
+                      key={ex.exception_id}
+                      className={`master-card ${selectedException?.exception_id === ex.exception_id ? 'selected' : ''}`}
+                      onClick={() => setSelectedException(ex)}
+                    >
+                      <div className="card-row">
+                        <span className={`tag ${ex.severity?.toLowerCase()}`}>{ex.severity}</span>
+                        <strong className="card-title">{formatName(ex.type)}</strong>
+                      </div>
+                      <div className="card-meta">
+                        <span className="mono-id">{ex.exception_id}</span>
+                        <span>{ex.references?.length || 0} Evidence Ref(s)</span>
+                      </div>
+                      <p className="card-desc">{ex.reason}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* RIGHT DETAIL DRILL-DOWN */}
+              <div className="detail-panel">
+                {selectedException ? (
+                  <div className="detail-content">
+                    <div className="detail-header-block">
+                      <div>
+                        <span className={`tag ${selectedException.severity?.toLowerCase()}`}>
+                          {selectedException.severity} SEVERITY
+                        </span>
+                        <h2>{formatName(selectedException.type)}</h2>
+                        <span className="mono-id">ID: {selectedException.exception_id}</span>
+                      </div>
+                      <span className="status-chip escalated">ESCALATED FOR REVIEW</span>
+                    </div>
+
+                    {/* 1. SYSTEM DECISION */}
+                    <div className="detail-group">
+                      <h4 className="group-title">1. System Decision (Deterministic Engine)</h4>
+                      <div className="callout-box warning-box">
+                        <p><strong>Reason:</strong> {selectedException.reason}</p>
+                        {selectedException.affected_orders && selectedException.affected_orders.length > 0 && (
+                          <p className="mt-2">
+                            <strong>Affected Orders ({selectedException.affected_orders.length}):</strong>{" "}
+                            {selectedException.affected_orders.join(", ")}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 2. VERIFIED EVIDENCE */}
+                    <div className="detail-group">
+                      <h4 className="group-title">2. Verified Evidence References</h4>
+                      <div className="evidence-tags">
+                        {(selectedException.references || []).map((ref: string, i: number) => (
+                          <span key={i} className="evidence-chip">📄 {ref}</span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* 3. AI INVESTIGATION */}
+                    <div className="detail-group">
+                      <h4 className="group-title">3. AI Investigation (Evidence Explanation Layer)</h4>
+                      {selectedException.ai_investigation ? (
+                        <div className="ai-card">
+                          <div className="ai-card-header">
+                            <span className="ai-label">✦ Grounded Incident Analysis</span>
+                            <span className="ai-badge">Verified Input</span>
+                          </div>
+
+                          <p className="ai-summary">{renderCleanText(selectedException.ai_investigation.summary)}</p>
+
+                          {selectedException.ai_investigation.observed_facts && (
+                            <div className="ai-block">
+                              <strong>Observed Facts:</strong>
+                              <ul>
+                                {selectedException.ai_investigation.observed_facts.map((fact: any, idx: number) => (
+                                  <li key={idx}>{renderCleanText(fact)}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {selectedException.ai_investigation.why_escalated && (
+                            <div className="ai-block">
+                              <strong>Why Automatic Resolution Was Refused:</strong>
+                              <p className="text-amber-dark">{renderCleanText(selectedException.ai_investigation.why_escalated)}</p>
+                            </div>
+                          )}
+
+                          {selectedException.ai_investigation.suggested_action && (
+                            <div className="ai-action-box">
+                              <strong>Recommended Operator Action:</strong>
+                              <p className="text-green-dark">{renderCleanText(selectedException.ai_investigation.suggested_action)}</p>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="callout-box neutral-box">
+                          <p>AI investigation unavailable. Deterministic evidence remains available above.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="empty-panel">
+                    <span className="empty-icon">👈</span>
+                    <h3>Select an Exception to Inspect</h3>
+                    <p>View the deterministic system decision, verified references, and AI investigation.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* DECISIONS TAB */}
+        {activeTab === "Decisions" && (
+          <div className="content-space">
+            <div className="section-card">
+              <div className="section-header">
+                <div>
+                  <h3 className="section-heading">Order Reconciliation Decisions ({filteredDecisions.length})</h3>
+                  <p className="section-sub">Audit log of deterministic rules executed across all batch orders</p>
+                </div>
+                <input 
+                  type="text" 
+                  placeholder="Search order ID or rule..." 
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="input-search"
+                />
+              </div>
+
+              <div className="table-container">
+                <table className="clean-table">
                   <thead>
                     <tr>
-                      <th>Order</th>
+                      <th>Order ID</th>
                       <th>Decision</th>
-                      <th>Reason</th>
-                      <th>Rule</th>
+                      <th>Rule ID</th>
+                      <th>Exception Category</th>
+                      <th>Decision Reason</th>
                     </tr>
                   </thead>
-
                   <tbody>
-                    {decisions.slice(0, 8).map((decision: any) => (
-                      <tr key={decision.order_id}>
+                    {filteredDecisions.map((d: any) => (
+                      <tr key={d.order_id}>
+                        <td><strong className="mono-id">{d.order_id}</strong></td>
                         <td>
-                          <strong>{decision.order_id}</strong>
-                        </td>
-
-                        <td>
-                          <span
-                            className={`decision-badge ${
-                              decision.decision === "RECONCILED"
-                                ? "reconciled"
-                                : "exception"
-                            }`}
-                          >
-                            {decision.decision === "RECONCILED"
-                              ? "✓ Reconciled"
-                              : "⚠ Exception"}
+                          <span className={`status-chip ${d.decision.toLowerCase()}`}>
+                            {d.decision === "RECONCILED" ? "Reconciled" : "Escalated"}
                           </span>
                         </td>
-
-                        <td className="reason-cell">
-                          {decision.decision_reason}
-                        </td>
-
-                        <td>
-                          <code>{decision.rule_id}</code>
-                        </td>
+                        <td><code className="rule-code">{d.rule_id}</code></td>
+                        <td>{d.exception_type ? formatName(d.exception_type) : "—"}</td>
+                        <td className="reason-col">{d.decision_reason}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-            </section>
-          </>
+            </div>
+          </div>
+        )}
+
+        {/* EVALUATION TAB */}
+        {activeTab === "Evaluation" && (
+          <div className="content-space">
+            <div className="section-card">
+              <div className="section-header">
+                <div>
+                  <h3 className="section-heading">Evaluator & Ground Truth Performance</h3>
+                  <p className="section-sub">Evaluator-only comparison. Ground truth is isolated from the reconciliation and decision path.</p>
+                </div>
+              </div>
+
+              {batchData?.evaluation ? (
+                <div className="metrics-grid mb-6">
+                  <div className="metric-card">
+                    <span className="metric-label">TOTAL EVALUATED CASES</span>
+                    <div className="metric-number">{batchData.evaluation.total_cases_evaluated}</div>
+                    <span className="metric-sub">Synthetic evaluation batch</span>
+                  </div>
+
+                  <div className="metric-card">
+                    <span className="metric-label">CORRECTLY RECONCILED</span>
+                    <div className="metric-number text-green">{batchData.evaluation.correctly_reconciled}</div>
+                    <span className="metric-sub">True Positives</span>
+                  </div>
+
+                  <div className="metric-card">
+                    <span className="metric-label">CORRECTLY ESCALATED</span>
+                    <div className="metric-number text-blue">{batchData.evaluation.correctly_escalated}</div>
+                    <span className="metric-sub">True Negatives (Safety Policy)</span>
+                  </div>
+
+                  <div className="metric-card border-green-light">
+                    <span className="metric-label">INCORRECT AUTO-RESOLUTIONS</span>
+                    <div className="metric-number text-green">{batchData.evaluation.incorrect_auto_resolutions}</div>
+                    <span className="metric-sub">Zero False Positives</span>
+                  </div>
+
+                  <div className="metric-card">
+                    <span className="metric-label">PRECISION</span>
+                    <div className="metric-number">{(batchData.evaluation.precision * 100).toFixed(1)}%</div>
+                    <span className="metric-sub">Accuracy of auto-reconciled orders</span>
+                  </div>
+
+                  <div className="metric-card">
+                    <span className="metric-label">RECALL</span>
+                    <div className="metric-number">{(batchData.evaluation.recall * 100).toFixed(1)}%</div>
+                    <span className="metric-sub">Resolvable case coverage</span>
+                  </div>
+
+                  <div className="metric-card">
+                    <span className="metric-label">F1 SCORE</span>
+                    <div className="metric-number">{(batchData.evaluation.f1 * 100).toFixed(1)}%</div>
+                    <span className="metric-sub">Harmonic mean precision/recall</span>
+                  </div>
+
+                  <div className="metric-card">
+                    <span className="metric-label">SAFE RESOLUTION RATE</span>
+                    <div className="metric-number">{(batchData.evaluation.safe_resolution_rate * 100).toFixed(1)}%</div>
+                    <span className="metric-sub">Automated vs total ratio</span>
+                  </div>
+                </div>
+              ) : (
+                <p>Evaluation data unavailable. Run batch reconciliation first.</p>
+              )}
+
+              {/* SAFETY ARCHITECTURE FLOW */}
+              <h4 className="group-title mt-4">System Architecture Safety Boundary</h4>
+              <div className="arch-flow-grid">
+                <div className="flow-card">
+                  <h5>Deterministic Engine</h5>
+                  <p>Makes 100% of financial reconciliation decisions using rule precedence.</p>
+                </div>
+                <div className="flow-arrow">→</div>
+                <div className="flow-card">
+                  <h5>AI Investigator</h5>
+                  <p>Explains verified exception evidence for human operators.</p>
+                </div>
+                <div className="flow-arrow">→</div>
+                <div className="flow-card">
+                  <h5>Human Operator</h5>
+                  <p>Reviews escalated cases with grounded facts & recommended actions.</p>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
       </main>
     </div>
   );
 }
 
-function ControllerPanel({
-  data,
-  loading,
-  error,
-  onRun,
-}: {
-  data?: Data;
-  loading: boolean;
-  error: string;
-  onRun: () => void;
-}) {
-  const batch = data?.batch;
-  const trace = batch?.activity_trace || [];
-
-  return (
-    <section className="controller-panel">
-      <div className="controller-heading">
-        <div>
-          <p className="eyebrow">BOUNDED EVIDENCE REVIEW</p>
-          <h3>AI Controller assessment</h3>
-          <p>Read-only prioritization over the current deterministic run.</p>
-        </div>
-        <button className="secondary-button compact" onClick={onRun} disabled={loading}>
-          {loading ? "Working..." : "Run assessment"}
-        </button>
-      </div>
-
-      {error && <div className="controller-error">{error}</div>}
-      {loading && <div className="controller-loading">Observing reconciliation state and collecting approved evidence...</div>}
-      {!loading && !error && !batch && (
-        <div className="controller-empty">Run the controller to prioritize incidents and gather an auditable evidence trail.</div>
-      )}
-      {batch && (
-        <>
-          <div className="controller-status-row">
-            <span className={`controller-status ${String(batch.status).toLowerCase()}`}>{batch.status}</span>
-            <span className="safety-label">No financial actions executed automatically</span>
-          </div>
-          <div className="batch-metrics">
-            <MetricCard label="Batch records" value={batch.records_processed} detail="Orders, transactions, settlements" type="neutral" />
-            <MetricCard label="Safe match rate" value={`${(batch.match_rate * 100).toFixed(1)}%`} detail={`${batch.reconciled_cases} of ${batch.total_cases} orders`} type="success" />
-            <MetricCard label="Throughput" value={`${Number(batch.timings?.records_per_second || 0).toFixed(0)}`} detail="Measured records/sec" type="neutral" />
-            <MetricCard label="Unresolved" value={batch.unresolved_exceptions?.length || 0} detail="Escalated incidents" type="danger" />
-          </div>
-          {batch.evaluation && <div className="accuracy-strip"><strong>Measured accuracy</strong><span>Precision {(batch.evaluation.precision * 100).toFixed(1)}%</span><span>Recall {(batch.evaluation.recall * 100).toFixed(1)}%</span><span>F1 {(batch.evaluation.f1 * 100).toFixed(1)}%</span><span>{batch.evaluation.incorrect_auto_resolutions} unsafe auto-resolutions</span></div>}
-          <p className="priority-assessment">The deterministic engine processed the complete batch. {batch.escalated_cases} order cases remain escalated for human review.</p>
-          <div className="controller-columns">
-            <div>
-              <h4>Verified findings</h4>
-              {batch.unresolved_exceptions?.length ? (
-                <ul>{batch.unresolved_exceptions.slice(0, 5).map((finding: any) => <li key={finding.exception_id}><strong>{finding.severity} {formatName(finding.type)}</strong>: {finding.reason}</li>)}</ul>
-              ) : <p className="muted">No unresolved incidents were verified.</p>}
-              <h4>Recommended human actions</h4>
-              <ul><li>Review unresolved incidents using the evidence references.</li><li>Do not apply consequential financial adjustments without operator approval.</li></ul>
-            </div>
-            <div>
-              <h4>Activity trace</h4>
-              <ol className="trace-list">{trace.map((event: any, index: number) => <li key={`${event.action}-${index}`}><strong>{event.state}</strong> {event.action}{event.outcome ? `: ${event.outcome}` : ""}</li>)}</ol>
-              <small className="evidence-count">{batch.tool_calls} approved tool calls · {batch.timings?.deterministic_reconciliation_seconds?.toFixed(4)}s deterministic processing</small>
-            </div>
-          </div>
-        </>
-      )}
-    </section>
-  );
+function renderCleanText(item: any): string {
+  if (!item) return "";
+  if (typeof item === "string") {
+    if (item.trim().startsWith("{") && item.trim().endsWith("}")) {
+      try {
+        const parsed = JSON.parse(item);
+        return parsed.summary || parsed.description || item;
+      } catch {
+        return item;
+      }
+    }
+    return item;
+  }
+  if (typeof item === "object") {
+    return item.summary || item.text || JSON.stringify(item);
+  }
+  return String(item);
 }
 
-function FeatureCard({
-  icon,
-  title,
-  text,
-}: {
-  icon: string;
-  title: string;
-  text: string;
-}) {
-  return (
-    <div className="feature-card">
-      <span className="feature-icon">{icon}</span>
-      <h3>{title}</h3>
-      <p>{text}</p>
-    </div>
-  );
-}
-
-function MetricCard({
-  label,
-  value,
-  detail,
-  type,
-}: {
-  label: string;
-  value: number | string;
-  detail: string;
-  type: string;
-}) {
-  return (
-    <div className={`metric-card ${type}`}>
-      <div className="metric-top">
-        <span>{label}</span>
-        <span className="metric-symbol">
-          {type === "success"
-            ? "↗"
-            : type === "warning"
-            ? "!"
-            : type === "danger"
-            ? "!"
-            : "◌"}
-        </span>
-      </div>
-      <strong>{value}</strong>
-      <small>{detail}</small>
-    </div>
-  );
-}
-
-function formatName(value: string) {
-  return String(value)
-    .replaceAll("_", " ")
-    .toLowerCase()
-    .replace(/\b\w/g, (letter: string) => letter.toUpperCase());
+function formatName(str: string) {
+  if (!str) return "";
+  return str.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

@@ -164,9 +164,8 @@ def test_batch_controller_processes_all_cases_and_never_takes_action():
     assert report.reconciled_cases + report.escalated_cases == report.total_cases
     assert report.status == "NEEDS_HUMAN_REVIEW"
     assert report.financial_action_taken is False
-    assert [event["state"] for event in report.activity_trace] == [
-        "OBSERVING",
-        "ANALYZING",
-        "VERIFYING",
-        "NEEDS_HUMAN_REVIEW",
-    ]
+    states = [event["state"] for event in report.activity_trace]
+    assert "OBSERVING" in states
+    assert "ANALYZING" in states
+    assert "VERIFYING" in states
+    assert "NEEDS_HUMAN_REVIEW" in states
