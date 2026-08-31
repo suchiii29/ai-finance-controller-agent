@@ -17,7 +17,7 @@ from app.tools import (
 )
 from app.ingestion import process_csv_upload
 from app.investigation import investigate_and_explain_highest_priority
-from app.evaluation import evaluate_batch, load_ground_truth
+from app.evaluation import evaluate_batch, load_ground_truth, get_ground_truth_path
 from app.report_generator import generate_html_report
 
 app = FastAPI(title="FinanceOS — AI Finance Controller")
@@ -63,11 +63,11 @@ def reconcile(request: ReconcileRequest = ReconcileRequest()):
     summary = run_agent(request.instruction)
     result = get_reconciliation_result()
     report = run_batch_controller()
-    ground_truth_path = Path(__file__).resolve().parents[2] / "data" / "generated" / "ground_truth.json"
-    if ground_truth_path.exists():
+    gt_path = get_ground_truth_path()
+    if gt_path is not None:
         report.evaluation = evaluate_batch(
             result,
-            load_ground_truth(ground_truth_path),
+            load_ground_truth(gt_path),
         )
     set_current_report(report)
 
@@ -143,11 +143,11 @@ def run_controller_batch():
 
     # Ground truth evaluation is ONLY active for synthetic demo dataset
     if not is_custom_upload():
-        ground_truth_path = Path(__file__).resolve().parents[2] / "data" / "generated" / "ground_truth.json"
-        if ground_truth_path.exists():
+        gt_path = get_ground_truth_path()
+        if gt_path is not None:
             report.evaluation = evaluate_batch(
                 get_reconciliation_result(),
-                load_ground_truth(ground_truth_path),
+                load_ground_truth(gt_path),
             )
     else:
         report.evaluation = None
@@ -166,11 +166,11 @@ def download_report():
     if report is None:
         report = run_batch_controller()
         if not is_custom_upload():
-            ground_truth_path = Path(__file__).resolve().parents[2] / "data" / "generated" / "ground_truth.json"
-            if ground_truth_path.exists():
+            gt_path = get_ground_truth_path()
+            if gt_path is not None:
                 report.evaluation = evaluate_batch(
                     get_reconciliation_result(),
-                    load_ground_truth(ground_truth_path),
+                    load_ground_truth(gt_path),
                 )
         else:
             report.evaluation = None

@@ -11,6 +11,20 @@ from pathlib import Path
 from app.models import BatchResult, EvaluationMetrics
 
 
+def get_ground_truth_path() -> Path | None:
+    """Find the synthetic benchmark ground_truth.json file if it exists."""
+    candidates = [
+        Path(__file__).resolve().parents[2] / "data" / "generated" / "ground_truth.json",
+        Path(__file__).resolve().parents[1] / "data" / "generated" / "ground_truth.json",
+        Path.cwd() / "data" / "generated" / "ground_truth.json",
+        Path.cwd() / ".." / "data" / "generated" / "ground_truth.json",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def load_ground_truth(path: str | Path) -> list[dict[str, str]]:
     with Path(path).open(encoding="utf-8") as file:
         return json.load(file)

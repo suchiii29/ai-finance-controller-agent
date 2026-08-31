@@ -78,8 +78,10 @@ function App() {
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   const runDemoBatch = async () => {
+    setSelectedException(null);
     setLoading(true);
     setProcessingStage("Loading synthetic financial dataset...");
+
 
     try {
       setProcessingStage("Executing deterministic rule engine...");
@@ -115,8 +117,10 @@ function App() {
       return;
     }
 
+    setSelectedException(null);
     setUploadError(null);
     setLoading(true);
+
     setProcessingStage("Parsing & classifying uploaded CSV financial records...");
 
     const formData = new FormData();
