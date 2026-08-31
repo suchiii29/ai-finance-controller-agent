@@ -169,3 +169,77 @@ def test_batch_controller_processes_all_cases_and_never_takes_action():
     assert "ANALYZING" in states
     assert "VERIFYING" in states
     assert "NEEDS_HUMAN_REVIEW" in states
+
+
+# ============================================================
+# Ask FinanceOS: Broad Operational Query & Missing Record Tests
+# ============================================================
+
+from app.agent import ask_finance_agent
+from app.tools import set_demo_batch
+
+
+def test_ask_financeos_broad_operational_summary():
+    """Broad query must return dynamic grounded summary, not generic fallback."""
+    set_demo_batch()
+    res = ask_finance_agent("What are the biggest issues in this batch?")
+
+    assert res["evidence_verified"] is True
+    assert res["type"] == "OPERATIONAL_SUMMARY"
+    # Must include batch outcome facts
+    assert "Overall Batch Outcome" in res["answer"]
+    assert "Reconciled" in res["answer"]
+    assert "Escalated" in res["answer"]
+    # Must include exception categories
+    assert "Exception Categories" in res["answer"] or "Recommended Operator Actions" in res["answer"]
+    # Must NOT be the generic fallback strings
+    assert "None reported." not in res["answer"]
+    assert "could not complete" not in res["answer"]
+
+
+def test_ask_financeos_operational_summary_variant():
+    """Alternate phrasing of broad query also returns grounded operational summary."""
+    set_demo_batch()
+    res = ask_finance_agent("Give me an operational summary of this run.")
+
+    assert res["evidence_verified"] is True
+    assert res["type"] == "OPERATIONAL_SUMMARY"
+    assert "Overall Batch Outcome" in res["answer"]
+
+
+def test_ask_financeos_missing_order_returns_clear_not_found():
+    """Non-existent order ID must return a clear not-found response, no hallucination."""
+    set_demo_batch()
+    res = ask_finance_agent("Why was order ORD-DOESNOTEXIST-99999 escalated?")
+
+    assert res["evidence_verified"] is False
+    assert "not found" in res["answer"].lower()
+    assert "ORD-DOESNOTEXIST-99999" in res["answer"]
+
+
+def test_ask_financeos_missing_transaction_returns_clear_not_found():
+    """Non-existent transaction ID must return a clear not-found response."""
+    set_demo_batch()
+    res = ask_finance_agent("Tell me about transaction TXN-DOESNOTEXIST-00000")
+
+    assert res["evidence_verified"] is False
+    assert "not found" in res["answer"].lower()
+
+
+def test_ask_financeos_settlement_batch_lookup_normalization():
+    """Settlement batch query with shorthand SET-02 resolves to canonical SET-002."""
+    set_demo_batch()
+    res = ask_finance_agent("Tell me about settlement batch SET-02")
+
+    assert res["evidence_verified"] is True
+    assert res["type"] == "BATCH_LOOKUP"
+    assert "SET-002" in res["answer"]
+
+
+def test_ask_financeos_missing_batch_returns_clear_not_found():
+    """Non-existent settlement batch ID returns a clear not-found response."""
+    set_demo_batch()
+    res = ask_finance_agent("Tell me about settlement batch SETT-DOESNOTEXIST-999")
+
+    assert res["evidence_verified"] is False
+    assert "not found" in res["answer"].lower()

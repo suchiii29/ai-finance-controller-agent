@@ -19,6 +19,9 @@ from app.tools import (
     get_transaction_details_tool,
     run_reconciliation_tool,
     get_reconciliation_result,
+    get_current_ingestion_summary,
+    get_current_data,
+    is_custom_upload,
 )
 
 MAX_TOOL_CALLS = 6
@@ -286,20 +289,514 @@ def run_controller_agent(goal: str = CONTROLLER_GOAL, max_tool_calls: int = MAX_
         return ControllerResponse(controller=outcome, activity_trace=trace, timings=timings)
 
 
-def ask_finance_agent(question: str):
-    """Backward-compatible text response for the existing general agent endpoint."""
+def get_broad_operational_summary_text(rec_result) -> tuple[str, dict[str, Any]]:
+    total_orders = len(rec_result.decisions)
+    reconciled_orders = sum(1 for d in rec_result.decisions if d.decision.value == "RECONCILED")
+    escalated_orders = total_orders - reconciled_orders
+    safe_rate = (reconciled_orders / total_orders * 100.0) if total_orders > 0 else 0.0
 
-    controller = run_controller_agent(question).controller
-    return (
-        f"STATUS: {controller.status.value}\n"
-        f"PRIORITY: {controller.priority_assessment}\n"
-        f"FINDINGS: {'; '.join(controller.findings) or 'None reported.'}\n"
-        f"NEXT STEPS: {'; '.join(controller.recommended_actions)}"
+    total_incidents = len(rec_result.exceptions)
+    urgent_incidents = sum(1 for e in rec_result.exceptions if (getattr(e.severity, 'value', e.severity) == "URGENT"))
+    review_incidents = total_incidents - urgent_incidents
+
+    category_counts = {}
+    for e in rec_result.exceptions:
+        exc_type = e.exception_type.value if hasattr(e.exception_type, "value") else str(e.exception_type)
+        category_counts[exc_type] = category_counts.get(exc_type, 0) + 1
+
+    cat_lines = "\n".join(f"{cat} — {cnt}" for cat, cnt in category_counts.items()) if category_counts else "None"
+
+    from app.investigation import get_recommended_action_by_type
+    actions = []
+    seen_types = set()
+    for e in rec_result.exceptions:
+        exc_type = e.exception_type.value if hasattr(e.exception_type, "value") else str(e.exception_type)
+        if exc_type not in seen_types:
+            seen_types.add(exc_type)
+            actions.append(get_recommended_action_by_type(exc_type, e.refs))
+        if len(actions) >= 4:
+            break
+
+    if not actions:
+        actions = ["Continue routine monitoring; no unresolved exception incidents detected."]
+
+    ingestion = get_current_ingestion_summary()
+    ingestion_lines = ""
+    if ingestion:
+        ingestion_lines = (
+            f"\nIngestion Context\n\n"
+            f"Raw rows received: {ingestion.total_rows_received}\n"
+            f"Usable orders: {ingestion.usable_orders_count}\n"
+            f"Gateway transactions: {ingestion.usable_transactions_count}\n"
+            f"Bank settlements: {ingestion.usable_settlements_count}\n"
+            f"Ignored columns: {', '.join(ingestion.ignored_columns) if ingestion.ignored_columns else 'None'}\n"
+            f"Unprocessable rows: {len(ingestion.unprocessable_records)}"
+        )
+
+    findings_lines = "\n\n".join(
+        f"[{e.exception_id}] ({getattr(e.severity, 'value', e.severity)}) {e.reason}"
+        for e in rec_result.exceptions[:4]
+    ) if rec_result.exceptions else "All deterministic checks passed without exception."
+
+    ans = (
+        f"Overall Batch Outcome\n\n"
+        f"Reconciled\n{reconciled_orders} of {total_orders} orders\n\n"
+        f"Escalated\n{escalated_orders} orders\n\n"
+        f"Safe resolution rate\n{safe_rate:.2f}%\n\n"
+        f"Exception Overview\n\n"
+        f"{escalated_orders} escalated orders contain {total_incidents} exception incidents:\n"
+        f"{urgent_incidents} urgent and {review_incidents} review-level.\n\n"
+        f"Exception Categories\n\n"
+        f"{cat_lines}\n\n"
+        f"Operational Findings\n\n"
+        f"{findings_lines}\n\n"
+        f"Recommended Operator Actions\n\n" +
+        "\n\n".join(act for act in actions) +
+        ingestion_lines
     )
 
+    details = {
+        "run_id": rec_result.run_id,
+        "reconciled_orders": reconciled_orders,
+        "total_orders": total_orders,
+        "escalated_orders": escalated_orders,
+        "safe_resolution_rate": safe_rate,
+        "total_incidents": total_incidents,
+        "urgent_incidents": urgent_incidents,
+        "review_incidents": review_incidents,
+        "category_counts": category_counts,
+        "findings": [
+            {
+                "exception_id": e.exception_id,
+                "severity": getattr(e.severity, 'value', e.severity),
+                "reason": e.reason
+            }
+            for e in rec_result.exceptions
+        ],
+        "recommended_actions": actions,
+        "ingestion": {
+            "total_rows_received": ingestion.total_rows_received,
+            "usable_orders_count": ingestion.usable_orders_count,
+            "usable_transactions_count": ingestion.usable_transactions_count,
+            "usable_settlements_count": ingestion.usable_settlements_count,
+            "ignored_columns": ingestion.ignored_columns,
+            "ignored_rows_count": ingestion.ignored_rows_count,
+            "unprocessable_records_count": len(ingestion.unprocessable_records),
+        } if ingestion else None
+    }
 
-def run_agent(instruction: str):
-    return ask_finance_agent(instruction)
+    return ans, details
+
+
+import re
+
+def ask_finance_agent(question: str) -> dict[str, Any]:
+    """
+    Answers questions dynamically against the CURRENT reconciliation run.
+    Uses deterministic backend tool retrieval first before falling back to LLM.
+    """
+    q_lower = question.lower()
+    rec_result = get_reconciliation_result()
+
+    # Generic Transaction Failure lookup
+    if "why couldn't this transaction be reconciled" in q_lower or "why couldn't the transaction be reconciled" in q_lower:
+        failed_txn_id = None
+        for exc in rec_result.exceptions:
+            for ref in exc.refs:
+                if ref.startswith("TXN-"):
+                    failed_txn_id = ref
+                    break
+            if failed_txn_id:
+                break
+        
+        if not failed_txn_id:
+            escalated_decisions = [d for d in rec_result.decisions if d.decision.value == "ESCALATED"]
+            for d in escalated_decisions:
+                for ev in d.evidence:
+                    if ev.startswith("txn_id="):
+                        failed_txn_id = ev.split("=")[1]
+                        break
+                if failed_txn_id:
+                    break
+        
+        if failed_txn_id:
+            question = f"Why couldn't transaction {failed_txn_id} be reconciled?"
+        else:
+            return {
+                "question": question,
+                "answer": "No transaction exceptions or failures were found in the current run.",
+                "evidence_verified": True,
+                "type": "TRANSACTION_LOOKUP",
+            }
+
+    # 1. Transaction ID Lookup (normalized TXN-008 -> TXN-0008)
+    txn_match = re.search(r'\b(TXN-[\w-]+)\b', question, re.IGNORECASE) or re.search(r'\btransaction\s+([\w-]+)\b', question, re.IGNORECASE)
+    if txn_match:
+        raw_id = txn_match.group(1)
+        if not raw_id.upper().startswith("TXN-") and txn_match.lastindex and txn_match.lastindex >= 2:
+            raw_id = txn_match.group(2)
+        raw_id = raw_id.upper()
+        if not raw_id.startswith("TXN-"):
+            raw_id = f"TXN-{raw_id}"
+
+        orders_data, txns_data, settlements_data = get_current_data()
+        normalized_id = raw_id
+        if txns_data:
+            found = False
+            for t in txns_data:
+                tid = str(t.get("txn_id", "")).upper()
+                if tid == raw_id:
+                    normalized_id = t.get("txn_id")
+                    found = True
+                    break
+            if not found:
+                m = re.match(r'^TXN-(\d+)$', raw_id, re.IGNORECASE)
+                if m:
+                    num_val = int(m.group(1))
+                    for t in txns_data:
+                        tid = str(t.get("txn_id", "")).upper()
+                        tm = re.match(r'^TXN-(\d+)$', tid, re.IGNORECASE)
+                        if tm and int(tm.group(1)) == num_val:
+                            normalized_id = t.get("txn_id")
+                            found = True
+                            break
+
+        details = get_transaction_details_tool(normalized_id)
+        if details.get("error"):
+            return {
+                "question": question,
+                "answer": f"{raw_id} was not found in the current batch.",
+                "evidence_verified": False,
+                "type": "TRANSACTION_LOOKUP",
+                "details": details,
+            }
+        
+        tx = details["transaction"]
+        order_ref = tx.get("order_ref") or "None"
+        batch_id = tx.get("settlement_batch_id") or "None"
+        gross = tx.get("gross_amount", "N/A")
+        fee = tx.get("fee", "N/A")
+        net = tx.get("net_amount", "N/A")
+        curr = tx.get("currency", "INR")
+
+        ans = (
+            f"Transaction {normalized_id} verified evidence:\n"
+            f"• Transaction ID: {normalized_id}\n"
+            f"• Linked Order Reference: {order_ref}\n"
+            f"• Settlement Batch: {batch_id}\n"
+            f"• Amounts: Gross={curr} {gross}, Fee={curr} {fee}, Net={curr} {net}\n"
+        )
+        
+        decisions = details.get("related_decisions", [])
+        exceptions = details.get("related_exceptions", [])
+        
+        if decisions:
+            ans += "\nRelated Reconciliation Decisions:\n"
+            for d in decisions:
+                ans += f"• Order {d['order_id']} is {d['decision']}. Reason: {d['reason']}\n"
+                
+        if exceptions:
+            ans += "\nRelated Exceptions:\n"
+            for e in exceptions:
+                ans += f"• [{e['exception_id']}] Severity: {e['severity']} | Type: {e['type']} | Reason: {e['reason']}\n"
+                
+        return {
+            "question": question,
+            "answer": ans,
+            "evidence_verified": True,
+            "type": "TRANSACTION_LOOKUP",
+            "details": details,
+        }
+
+    # 2. Order ID Lookup
+    order_match = re.search(r'\b(ORD-[\w-]+)\b', question, re.IGNORECASE) or re.search(r'\border\s+([\w-]+)\b', question, re.IGNORECASE)
+    if order_match:
+        raw_id = order_match.group(1)
+        if not raw_id.upper().startswith("ORD-") and order_match.lastindex and order_match.lastindex >= 2:
+            raw_id = order_match.group(2)
+        raw_id = raw_id.upper()
+        if not raw_id.startswith("ORD-"):
+            raw_id = f"ORD-{raw_id}"
+
+        orders_data, txns_data, settlements_data = get_current_data()
+        normalized_id = raw_id
+        if orders_data:
+            found = False
+            for o in orders_data:
+                oid = str(o.get("order_id", "")).upper()
+                if oid == raw_id:
+                    normalized_id = o.get("order_id")
+                    found = True
+                    break
+            if not found:
+                m = re.match(r'^ORD-(\d+)$', raw_id, re.IGNORECASE)
+                if m:
+                    num_val = int(m.group(1))
+                    for o in orders_data:
+                        oid = str(o.get("order_id", "")).upper()
+                        om = re.match(r'^ORD-(\d+)$', oid, re.IGNORECASE)
+                        if om and int(om.group(1)) == num_val:
+                            normalized_id = o.get("order_id")
+                            found = True
+                            break
+
+        details = get_order_details_tool(normalized_id)
+        if details.get("error"):
+            return {
+                "question": question,
+                "answer": f"{raw_id} was not found in the current batch.",
+                "evidence_verified": False,
+                "type": "ORDER_LOOKUP",
+                "details": details,
+            }
+        
+        status_str = "Reconciled" if details["decision"] == "RECONCILED" else "Escalated"
+        ans = (
+            f"Order {normalized_id} status: {status_str}.\n"
+            f"Rule applied: {details['rule_id']} — {details['reason']}.\n"
+            f"Evidence: {', '.join(details['evidence'])}."
+        )
+        if details.get("linked_exception_id"):
+            ans += f" Linked Exception ID: {details['linked_exception_id']}."
+            
+        return {
+            "question": question,
+            "answer": ans,
+            "evidence_verified": True,
+            "type": "ORDER_LOOKUP",
+            "details": details,
+        }
+
+    # 2b. Settlement Batch ID Lookup (normalized SET-02 -> SETT-0002)
+    sett_match = re.search(r'\b(SETT?-\d+)\b', question, re.IGNORECASE) or re.search(r'\bsettlement\s+batch\s+([\w-]+)\b', question, re.IGNORECASE)
+    if sett_match:
+        raw_id = sett_match.group(1)
+        if not raw_id.upper().startswith(("SET-", "SETT-")) and sett_match.lastindex and sett_match.lastindex >= 2:
+            raw_id = sett_match.group(2)
+        raw_id = raw_id.upper()
+        if not raw_id.startswith(("SET-", "SETT-")):
+            raw_id = f"SET-{raw_id}"
+
+        orders_data, txns_data, settlements_data = get_current_data()
+        normalized_id = raw_id
+        known_batches = set()
+        if settlements_data:
+            known_batches.update(s.get("settlement_batch_id") for s in settlements_data if s.get("settlement_batch_id"))
+        if txns_data:
+            known_batches.update(t.get("settlement_batch_id") for t in txns_data if t.get("settlement_batch_id"))
+
+        found = False
+        for b_id in known_batches:
+            if b_id.upper() == raw_id:
+                normalized_id = b_id
+                found = True
+                break
+        if not found:
+            m = re.match(r'^SETT?-(\d+)$', raw_id, re.IGNORECASE)
+            if m:
+                num_val = int(m.group(1))
+                for b_id in known_batches:
+                    bm = re.match(r'^SETT?-(\d+)$', b_id, re.IGNORECASE)
+                    if bm and int(bm.group(1)) == num_val:
+                        normalized_id = b_id
+                        found = True
+                        break
+
+        details = get_batch_details_tool(normalized_id)
+        if not details.get("transactions") and not details.get("settlement"):
+            return {
+                "question": question,
+                "answer": f"Settlement batch {raw_id} was not found in the current batch.",
+                "evidence_verified": False,
+                "type": "BATCH_LOOKUP",
+                "details": details,
+            }
+
+        s_info = details.get("settlement")
+        tx_count = details.get("transactions_found", 0)
+        s_amount = f"{s_info.get('currency', 'INR')} {s_info.get('credited_amount')}" if s_info and s_info.get('credited_amount') is not None else "No bank credit record"
+        v_date = s_info.get('value_date', 'N/A') if s_info else 'N/A'
+
+        ans = (
+            f"Settlement Batch {normalized_id} verified evidence:\n"
+            f"• Batch ID: {normalized_id}\n"
+            f"• Linked Transactions Count: {tx_count}\n"
+            f"• Bank Settlement Amount: {s_amount}\n"
+            f"• Value Date: {v_date}\n"
+        )
+        return {
+            "question": question,
+            "answer": ans,
+            "evidence_verified": True,
+            "type": "BATCH_LOOKUP",
+            "details": details,
+        }
+
+    # 3. Incident vs Record counts query
+    if any(k in q_lower for k in ("how many exception incidents", "incidents and orders", "affected orders count", "incident count")):
+        total_orders = len(rec_result.decisions)
+        reconciled_orders = sum(1 for d in rec_result.decisions if d.decision.value == "RECONCILED")
+        escalated_orders = total_orders - reconciled_orders
+        total_incidents = len(rec_result.exceptions)
+        urgent_incidents = sum(1 for e in rec_result.exceptions if (getattr(e.severity, 'value', e.severity) == "URGENT"))
+        review_incidents = total_incidents - urgent_incidents
+        
+        ans = f"{escalated_orders} escalated orders contain {total_incidents} exception incidents: {urgent_incidents} urgent and {review_incidents} review-level."
+        return {
+            "question": question,
+            "answer": ans,
+            "evidence_verified": True,
+            "type": "INCIDENT_COUNT",
+            "details": {
+                "escalated_orders": escalated_orders,
+                "total_incidents": total_incidents,
+                "urgent_incidents": urgent_incidents,
+                "review_incidents": review_incidents,
+            },
+        }
+
+    # 4. Safe Resolution Rate query
+    if any(k in q_lower for k in ("resolution rate", "safe resolution rate", "match rate", "reconciliation rate")):
+        total_orders = len(rec_result.decisions)
+        reconciled_orders = sum(1 for d in rec_result.decisions if d.decision.value == "RECONCILED")
+        rate = (reconciled_orders / total_orders * 100.0) if total_orders > 0 else 0.0
+        ans = f"The safe resolution rate for the current batch is {rate:.2f}% ({reconciled_orders} of {total_orders} orders safely reconciled)."
+        return {
+            "question": question,
+            "answer": ans,
+            "evidence_verified": True,
+            "type": "RESOLUTION_RATE",
+            "details": {"safe_resolution_rate": rate, "reconciled": reconciled_orders, "total": total_orders},
+        }
+
+    # 5. Escalated / Attention Orders Query
+    if any(k in q_lower for k in ("which orders require", "orders requiring attention", "escalated orders list")):
+        escalated_decisions = [d for d in rec_result.decisions if d.decision.value == "ESCALATED"]
+        if not escalated_decisions:
+            ans = "No orders currently require operator attention. All orders in this batch are safely reconciled."
+        else:
+            ans = f"Found {len(escalated_decisions)} order(s) requiring operator attention:\n" + "\n".join(
+                f"• Order {d.order_id}: {d.decision_reason} (Rule: {d.rule_id})" for d in escalated_decisions[:10]
+            )
+        return {
+            "question": question,
+            "answer": ans,
+            "evidence_verified": True,
+            "type": "ESCALATED_ORDERS",
+            "details": [d.model_dump(mode="json") for d in escalated_decisions],
+        }
+
+    # 6. Broad Operational Queries (Summary, biggest issues, operator attention)
+    if any(k in q_lower for k in (
+        "biggest issue", "main issue", "requires attention", "operator attention",
+        "operational summary", "batch summary", "summary of this run", "overview of this run",
+        "how did reconciliation go", "what needs attention", "summary of the batch", "biggest problem"
+    )):
+        ans, summary_details = get_broad_operational_summary_text(rec_result)
+        return {
+            "question": question,
+            "answer": ans,
+            "evidence_verified": True,
+            "type": "OPERATIONAL_SUMMARY",
+            "details": summary_details,
+        }
+
+    # 7. Ingestion Summary Query
+    if any(k in q_lower for k in ("ingest", "ingested", "ignored", "usable records", "columns ignored", "unprocessable")):
+        summary = get_current_ingestion_summary()
+        if not summary:
+            return {
+                "question": question,
+                "answer": "No ingestion summary is available for the current batch.",
+                "evidence_verified": False,
+                "type": "INGESTION_SUMMARY",
+            }
+        ans = (
+            f"Ingestion Summary for Current Batch:\n"
+            f"• Total Rows Received: {summary.total_rows_received}\n"
+            f"• Usable Records: {summary.usable_orders_count} orders, {summary.usable_transactions_count} gateway transactions, {summary.usable_settlements_count} bank settlements\n"
+            f"• Ignored Columns: {', '.join(summary.ignored_columns) if summary.ignored_columns else 'None'}\n"
+            f"• Ignored Rows: {summary.ignored_rows_count}\n"
+            f"• Unprocessable Records: {len(summary.unprocessable_records)}"
+        )
+        return {
+            "question": question,
+            "answer": ans,
+            "evidence_verified": True,
+            "type": "INGESTION_SUMMARY",
+            "details": summary.model_dump(mode="json"),
+        }
+
+    # 8. Amount Mismatches Query
+    if "amount mismatch" in q_lower or "mismatches" in q_lower:
+        mismatches = [
+            d for d in rec_result.decisions 
+            if d.exception_type and d.exception_type.value == "AMOUNT_MISMATCH"
+        ]
+        if not mismatches:
+            ans = "No amount mismatches were found in the current reconciliation batch."
+        else:
+            ans = f"Found {len(mismatches)} amount mismatch exception(s):\n" + "\n".join(
+                f"• Order {m.order_id}: {m.decision_reason} (Rule: {m.rule_id})" for m in mismatches[:10]
+            )
+        return {
+            "question": question,
+            "answer": ans,
+            "evidence_verified": True,
+            "type": "AMOUNT_MISMATCHES",
+            "details": [m.model_dump(mode="json") for m in mismatches],
+        }
+
+    # 9. Settlement Batch Integrity Query
+    if any(k in q_lower for k in ("settlement batch", "batch integrity", "failed batch", "batch fail")):
+        batch_exceptions = [
+            e for e in rec_result.exceptions 
+            if e.scope == "BATCH" or e.exception_type.value in ("BATCH_SUM_MISMATCH_UNRESOLVED", "BATCH_SUM_MISMATCH_ISOLATED", "ORPHAN_SETTLEMENT")
+        ]
+        if not batch_exceptions:
+            ans = "All settlement batches passed integrity checks successfully."
+        else:
+            ans = f"Found {len(batch_exceptions)} settlement batch exception(s):\n" + "\n".join(
+                f"• [{e.exception_id}] Severity: {e.severity} | Type: {e.exception_type.value} | Reason: {e.reason}"
+                for e in batch_exceptions[:10]
+            )
+        return {
+            "question": question,
+            "answer": ans,
+            "evidence_verified": True,
+            "type": "BATCH_INTEGRITY",
+            "details": [e.model_dump(mode="json") for e in batch_exceptions],
+        }
+
+    # 10. Fallback to Agent Controller Reasoning
+    controller_resp = run_controller_agent(question)
+    controller = controller_resp.controller
+    findings_str = "; ".join(controller.findings) if controller.findings else ""
+    actions_str = "; ".join(controller.recommended_actions) if controller.recommended_actions else ""
+
+    if not findings_str or "None reported" in findings_str or "could not complete" in findings_str:
+        ans, _ = get_broad_operational_summary_text(rec_result)
+    else:
+        ans = (
+            f"Operational Status: {controller.status.value}\n"
+            f"Priority Assessment: {controller.priority_assessment}\n"
+            f"Verified Findings: {findings_str}\n"
+            f"Recommended Action: {actions_str}"
+        )
+
+    return {
+        "question": question,
+        "answer": ans,
+        "evidence_verified": True,
+        "type": "CONTROLLER_AGENT",
+        "details": controller.model_dump(mode="json"),
+    }
+
+
+def run_agent(instruction: str) -> dict:
+    """Run a single Ask FinanceOS query and return the grounded response."""
+    res = ask_finance_agent(instruction)
+    return res
 
 
 def run_batch_controller() -> BatchControllerReport:
@@ -392,6 +889,9 @@ def run_batch_controller() -> BatchControllerReport:
     total_seconds = perf_counter() - started
     rec_result = get_reconciliation_result()
     records_processed = rec_result.records_processed
+    # match_rate is strictly: reconciled_orders / total_order_decisions
+    # total_cases = len(decisions) = number of usable orders processed
+    safe_match_rate = reconciled / total_cases if total_cases else 0.0
     return BatchControllerReport(
         run_id=rec_result.run_id,
         status=status,
@@ -399,7 +899,7 @@ def run_batch_controller() -> BatchControllerReport:
         total_cases=total_cases,
         reconciled_cases=reconciled,
         escalated_cases=escalated,
-        match_rate=reconciled / total_cases if total_cases else 0.0,
+        match_rate=safe_match_rate,
         unresolved_exceptions=[
             {
                 "exception_id": incident["exception_id"],
@@ -408,6 +908,7 @@ def run_batch_controller() -> BatchControllerReport:
                 "reason": incident["reason"],
                 "references": incident["references"],
                 "affected_orders": incident.get("affected_orders", []),
+                "verified_fields": incident.get("verified_fields", {}),
                 "ai_investigation": exception_explanations.get(incident["exception_id"]),
             }
             for incident in priority
@@ -424,4 +925,6 @@ def run_batch_controller() -> BatchControllerReport:
         ai_available=ai_available,
         fallback_used=fallback_used,
         financial_action_taken=False,
+        is_custom_batch=is_custom_upload(),
+        ingestion_summary=get_current_ingestion_summary().model_dump(mode="json") if get_current_ingestion_summary() else None,
     )

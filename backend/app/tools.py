@@ -1,5 +1,6 @@
 from app.data import read_csv
 from app.engine.reconciliation import run_reconciliation
+from app.ingestion import IngestionSummary
 
 
 # ============================================================
@@ -10,6 +11,69 @@ _current_result = None
 _current_orders = None
 _current_txns = None
 _current_settlements = None
+_current_ingestion_summary = None
+_is_custom_upload = False
+
+
+def set_custom_batch(orders: list[dict], txns: list[dict], settlements: list[dict], summary: IngestionSummary):
+    """
+    Sets session state to a custom uploaded financial batch.
+    Executes the deterministic reconciliation engine.
+    """
+    global _current_result, _current_orders, _current_txns, _current_settlements, _current_ingestion_summary, _is_custom_upload, _current_report
+
+    _current_orders = orders
+    _current_txns = txns
+    _current_settlements = settlements
+    _current_ingestion_summary = summary
+    _is_custom_upload = True
+    _current_report = None
+
+    _current_result = run_reconciliation(orders, txns, settlements)
+    return _current_result
+
+
+def set_demo_batch():
+    """
+    Sets session state to the synthetic demo batch.
+    Executes the deterministic reconciliation engine.
+    """
+    global _current_result, _current_orders, _current_txns, _current_settlements, _current_ingestion_summary, _is_custom_upload, _current_report
+
+    _current_orders = read_csv("orders.csv")
+    _current_txns = read_csv("gateway_transactions.csv")
+    _current_settlements = read_csv("bank_settlements.csv")
+
+    total_rows = len(_current_orders) + len(_current_txns) + len(_current_settlements)
+    _current_ingestion_summary = IngestionSummary(
+        success=True,
+        total_rows_received=total_rows,
+        usable_orders_count=len(_current_orders),
+        usable_transactions_count=len(_current_txns),
+        usable_settlements_count=len(_current_settlements),
+        ignored_columns=[],
+        ignored_rows_count=0,
+        detected_record_types=["order", "gateway_transaction", "bank_settlement"],
+        validation_warnings=[],
+        unprocessable_records=[],
+    )
+    _is_custom_upload = False
+    _current_report = None
+
+    _current_result = run_reconciliation(
+        _current_orders,
+        _current_txns,
+        _current_settlements,
+    )
+    return _current_result
+
+
+def get_current_ingestion_summary() -> IngestionSummary | None:
+    return _current_ingestion_summary
+
+
+def is_custom_upload() -> bool:
+    return _is_custom_upload
 
 
 def get_reconciliation_result(force_refresh=False):
@@ -24,20 +88,13 @@ def get_reconciliation_result(force_refresh=False):
     global _current_orders
     global _current_txns
     global _current_settlements
+    global _is_custom_upload
 
     if _current_result is None or force_refresh:
-
-        # Load all data ONCE for this investigation session
-        _current_orders = read_csv("orders.csv")
-        _current_txns = read_csv("gateway_transactions.csv")
-        _current_settlements = read_csv("bank_settlements.csv")
-
-        # Run deterministic reconciliation
-        _current_result = run_reconciliation(
-            _current_orders,
-            _current_txns,
-            _current_settlements,
-        )
+        if _is_custom_upload and _current_orders is not None:
+            _current_result = run_reconciliation(_current_orders, _current_txns, _current_settlements)
+        else:
+            set_demo_batch()
 
     return _current_result
 
@@ -84,6 +141,102 @@ def run_reconciliation_tool():
 
 # ============================================================
 # TOOL 2 — GET PRIORITY INCIDENTS
+def build_verified_evidence_fields(exception) -> dict[str, str]:
+    """
+    Extracts ONLY verified fields that actually exist in the current run snapshot.
+    Handles ExceptionRecord objects or dictionaries.
+    """
+    orders, txns, settlements = get_current_data()
+    orders = orders or []
+    txns = txns or []
+    settlements = settlements or []
+
+    if isinstance(exception, dict):
+        scope = exception.get("scope", "ORDER")
+        refs = exception.get("references") or exception.get("refs") or []
+        affected_orders = exception.get("affected_orders") or exception.get("affected_order_ids") or []
+    else:
+        scope = getattr(exception, "scope", "ORDER")
+        refs = getattr(exception, "refs", []) or []
+        affected_orders = getattr(exception, "affected_order_ids", []) or []
+
+    verified: dict[str, str] = {}
+
+    matched_txns = [t for t in txns if t.get("txn_id") in refs]
+    matched_orders = [o for o in orders if o.get("order_id") in refs or o.get("order_id") in affected_orders]
+    matched_settlements = [s for s in settlements if s.get("settlement_batch_id") in refs]
+
+    if not matched_txns and (refs or affected_orders):
+        matched_txns = [t for t in txns if t.get("order_ref") in refs or t.get("order_ref") in affected_orders]
+
+    if scope == "SOURCE_RECORD" or any(r.startswith("TXN-") for r in refs):
+        txn = matched_txns[0] if matched_txns else None
+        if txn:
+            verified["Transaction ID"] = str(txn.get("txn_id") or "Not available in uploaded data")
+            verified["Order ID"] = str(txn.get("order_ref") or "Not available in uploaded data")
+            verified["Settlement Batch"] = str(txn.get("settlement_batch_id") or "Not available in uploaded data")
+            verified["Gross Amount"] = f"{txn.get('currency', 'INR')} {txn.get('gross_amount')}" if txn.get("gross_amount") is not None else "Not available in uploaded data"
+            verified["Fee"] = f"{txn.get('currency', 'INR')} {txn.get('fee')}" if txn.get("fee") is not None else "Not available in uploaded data"
+            verified["Net Amount"] = f"{txn.get('currency', 'INR')} {txn.get('net_amount')}" if txn.get("net_amount") is not None else "Not available in uploaded data"
+            verified["Currency"] = str(txn.get("currency") or "INR")
+            verified["Relevant Date"] = str(txn.get("txn_date") or txn.get("timestamp") or "Not available in uploaded data")
+        else:
+            verified["Transaction ID"] = refs[0] if refs else "Not available in uploaded data"
+            verified["Order ID"] = affected_orders[0] if affected_orders else "Not available in uploaded data"
+            verified["Settlement Batch"] = "Not available in uploaded data"
+            verified["Gross Amount"] = "Not available in uploaded data"
+            verified["Fee"] = "Not available in uploaded data"
+            verified["Net Amount"] = "Not available in uploaded data"
+            verified["Currency"] = "Not available in uploaded data"
+            verified["Relevant Date"] = "Not available in uploaded data"
+
+    elif scope == "BATCH" or any(r.startswith("SET-") for r in refs):
+        batch_id = refs[0] if refs else "Unknown Batch"
+        settlement = matched_settlements[0] if matched_settlements else None
+        batch_txns = [t for t in txns if t.get("settlement_batch_id") == batch_id]
+        
+        verified["Settlement Batch"] = batch_id
+        if settlement and settlement.get("credited_amount") is not None:
+            verified["Settlement Amount"] = f"{settlement.get('currency', 'INR')} {settlement.get('credited_amount')}"
+        else:
+            verified["Settlement Amount"] = "Not available in uploaded data"
+        verified["Transaction Count"] = str(len(batch_txns))
+        verified["Currency"] = str(settlement.get("currency") or "INR") if settlement else "INR"
+        verified["Value Date"] = str(settlement.get("value_date") or "Not available in uploaded data") if settlement else "Not available in uploaded data"
+        if affected_orders:
+            verified["Affected Order IDs"] = ", ".join(affected_orders)
+
+    else:
+        order = matched_orders[0] if matched_orders else None
+        order_id = order.get("order_id") if order else (refs[0] if refs else "Unknown Order")
+        order_txns = [t for t in txns if t.get("order_ref") == order_id]
+        batch_ids = list({t.get("settlement_batch_id") for t in order_txns if t.get("settlement_batch_id")})
+        settlement_amounts = []
+        for b_id in batch_ids:
+            s = next((st for st in settlements if st.get("settlement_batch_id") == b_id), None)
+            if s and s.get("credited_amount") is not None:
+                settlement_amounts.append(f"{s.get('currency', 'INR')} {s.get('credited_amount')}")
+
+        verified["Order ID"] = order_id
+        if order and order.get("order_amount") is not None:
+            verified["Order Amount"] = f"{order.get('currency', 'INR')} {order.get('order_amount')}"
+        else:
+            verified["Order Amount"] = "Not available in uploaded data"
+        
+        verified["Transaction ID(s)"] = ", ".join(t.get("txn_id") for t in order_txns) if order_txns else "Not available in uploaded data"
+        verified["Settlement Batch"] = ", ".join(batch_ids) if batch_ids else "Not available in uploaded data"
+        verified["Settlement Amount"] = ", ".join(settlement_amounts) if settlement_amounts else "Not available in uploaded data"
+        verified["Currency"] = str(order.get("currency") or "INR") if order else "INR"
+        if order:
+            verified["Relevant Dates"] = f"Ordered: {order.get('order_date', 'N/A')} | Expected SLA: {order.get('expected_settlement_by', 'N/A')}"
+        else:
+            verified["Relevant Dates"] = "Not available in uploaded data"
+
+    return verified
+
+
+# ============================================================
+# TOOL 2 — GET PRIORITY INCIDENTS
 # ============================================================
 
 def get_priority_incidents_tool():
@@ -103,11 +256,13 @@ def get_priority_incidents_tool():
     return [
         {
             "exception_id": e.exception_id,
+            "scope": e.scope,
             "type": e.exception_type.value,
             "severity": e.severity,
             "reason": e.reason,
             "references": e.refs,
             "affected_orders": e.affected_order_ids or [],
+            "verified_fields": build_verified_evidence_fields(e),
         }
         for e in incidents
     ]
@@ -129,12 +284,14 @@ def get_exception_details_tool(exception_id: str):
         if e.exception_id == exception_id:
             return {
                 "exception_id": e.exception_id,
+                "scope": e.scope,
                 "type": e.exception_type.value,
                 "severity": e.severity,
                 "reason": e.reason,
                 "references": e.refs,
                 "evidence": e.evidence,
                 "affected_orders": e.affected_order_ids or [],
+                "verified_fields": build_verified_evidence_fields(e),
             }
 
     return {
@@ -294,3 +451,16 @@ def get_reconciliation_summary_tool():
         "runtime_counts": result.runtime_counts,
         "total_incidents": len(result.exceptions),
     }
+
+
+_current_report = None
+
+
+def get_current_report():
+    global _current_report
+    return _current_report
+
+
+def set_current_report(report):
+    global _current_report
+    _current_report = report

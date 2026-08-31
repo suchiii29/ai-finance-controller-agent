@@ -31,7 +31,8 @@ def parse_amount(value) -> Decimal:
 def parse_date(value) -> date:
     if value is None or str(value).strip() == "":
         raise ValueError("blank date")
-    return date.fromisoformat(str(value))
+    val_str = str(value).strip().split("T")[0].split(" ")[0]
+    return date.fromisoformat(val_str)
 
 
 def make_exception(

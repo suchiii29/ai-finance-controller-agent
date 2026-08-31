@@ -102,6 +102,8 @@ class BatchControllerReport(BaseModel):
     ai_available: bool = False
     fallback_used: bool = False
     financial_action_taken: bool = False
+    is_custom_batch: bool = False
+    ingestion_summary: dict[str, Any] | None = None
     evaluation: EvaluationMetrics | None = None
 
 

@@ -1,7 +1,10 @@
 __pycache__/
 *.pyc
+*.pyo
 .venv/
 .env
+.pytest_cache/
 node_modules/
 dist/
+tsconfig.tsbuildinfo
 data/generated/
