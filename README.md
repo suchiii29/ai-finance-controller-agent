@@ -360,6 +360,33 @@ All 29 tests pass covering reconciliation rules, ingestion edge cases, agent too
 - **Single-Tenant Prototype:** Built as a single-tenant operations console for Buildathon review.
 
 ---
+## Failure Recovery
+
+FinanceOS is designed to refuse unsafe reconciliation instead of forcing a match.
+
+When the system encounters incomplete, ambiguous, or inconsistent financial data, it preserves the evidence and escalates the case for operator review.
+
+Examples handled by the system include:
+
+- Duplicate transaction keys → escalated as `DUPLICATE_KEY`
+- Bank settlements without linked gateway transactions → `ORPHAN_SETTLEMENT`
+- Gateway transactions referencing missing orders → `UNRESOLVABLE_REFERENCE`
+- Multiple gateway transactions linked to one order → `DUPLICATE_CHARGE`
+- Missing gateway counterparts → `MISSING_COUNTERPART`
+- Settlement dates outside the allowed SLA → `DATE_OUTSIDE_SLA`
+- Settlement batch totals that cannot be safely attributed → `BATCH_SUM_MISMATCH_UNRESOLVED`
+
+The system does not guess or force a reconciliation when evidence is insufficient.
+
+Instead:
+
+1. The deterministic rule engine refuses unsafe resolution.
+2. The affected case is recorded as an exception.
+3. Verified evidence is preserved for investigation.
+4. The AI layer explains the evidence and refusal rationale.
+5. The case is escalated for operator review.
+
+This ensures that failures in reconciliation do not become incorrect automated financial decisions.
 
 ## 🎯 Design Principle
 
