@@ -17,3 +17,4 @@ data/generated/*
 !data/generated/orders.csv
 !data/generated/gateway_transactions.csv
 !data/generated/bank_settlements.csv
+!data/generated/ground_truth.json

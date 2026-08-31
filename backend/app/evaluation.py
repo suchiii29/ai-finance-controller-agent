@@ -8,21 +8,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+
+from app.data import DATA_DIR
 from app.models import BatchResult, EvaluationMetrics
 
 
 def get_ground_truth_path() -> Path | None:
-    """Find the synthetic benchmark ground_truth.json file if it exists."""
-    candidates = [
-        Path(__file__).resolve().parents[2] / "data" / "generated" / "ground_truth.json",
-        Path(__file__).resolve().parents[1] / "data" / "generated" / "ground_truth.json",
-        Path.cwd() / "data" / "generated" / "ground_truth.json",
-        Path.cwd() / ".." / "data" / "generated" / "ground_truth.json",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return None
+    """Return the synthetic benchmark ground truth from the canonical demo dataset directory."""
+    path = DATA_DIR / "ground_truth.json"
+    return path if path.exists() else None
 
 
 def load_ground_truth(path: str | Path) -> list[dict[str, str]]:
