@@ -344,6 +344,22 @@ def generate_html_report(report: BatchControllerReport) -> str:
             from app.investigation import get_recommended_action_by_type
             rec_action = get_recommended_action_by_type(exc["type"], exc.get("references", []))
             
+            proposal = exc.get("proposed_resolution")
+            proposal_html = ""
+            if proposal:
+                proposal_html = f"""
+                <div class="exception-action" style="margin-top: 12px; border-top: 1px solid #edf2f7; padding-top: 10px; background: #f8fafc; border-radius: 6px; padding: 10px;">
+                    <div style="font-weight: 700; color: #1e3a8a; margin-bottom: 6px;">AI Proposed Resolution</div>
+                    <div><strong>Proposal Type:</strong> {proposal.get("proposal_type", "N/A")}</div>
+                    <div><strong>Proposed Amount:</strong> {proposal.get("proposed_amount") or "N/A"}</div>
+                    <div><strong>Why this proposal exists:</strong> {proposal.get("explanation", "No explanation recorded.")}</div>
+                    <div><strong>Recommended Action:</strong> {proposal.get("recommended_action", "Review manually.")}</div>
+                    <div><strong>Confidence:</strong> {proposal.get("confidence", "Low")}</div>
+                    <div><strong>Human Approval Required:</strong> {"Yes" if proposal.get("requires_human_approval") else "No"}</div>
+                    <div style="margin-top: 8px; color: #4a5568; font-size: 12px;">Advisory proposal only — reconciliation status remains unchanged until independently reviewed.</div>
+                </div>
+                """
+
             html += f"""
             <div class="exception-card">
                 <div class="exception-header">
@@ -359,6 +375,7 @@ def generate_html_report(report: BatchControllerReport) -> str:
                 <div class="exception-action">
                     <strong>Recommended operator action:</strong> {rec_action}
                 </div>
+                {proposal_html}
             </div>
             """
 

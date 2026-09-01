@@ -290,6 +290,153 @@ def _parse_decimal_amount(raw_value):
         return None
 
 
+def _format_currency_amount(value: float | int | str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f"₹{numeric:,.2f}"
+
+
+def build_recovery_proposal_for_exception(incident: dict) -> dict:
+    """Build an advisory recovery proposal only from verified fields.
+
+    The deterministic reconciliation engine keeps the financial decision authority.
+    Each proposal is advisory, human-approved, and cannot alter the order state.
+    """
+    incident_id = incident.get("exception_id", "UNKNOWN")
+    exc_type = incident.get("type", "")
+    refs = incident.get("references", []) or []
+    verified_fields = incident.get("verified_fields") or {}
+    evidence_refs = refs
+
+    order_amount = None
+    net_amount = None
+    settlement_amount = None
+    if isinstance(verified_fields, dict):
+        order_amount = next(
+            (
+                _parse_decimal_amount(v)
+                for k, v in verified_fields.items()
+                if str(k).lower() in {"order amount", "order_amount", "gross amount", "gross_amount"}
+            ),
+            None,
+        )
+        net_amount = next(
+            (
+                _parse_decimal_amount(v)
+                for k, v in verified_fields.items()
+                if str(k).lower() in {"net amount", "net_amount"}
+            ),
+            None,
+        )
+        settlement_amount = next(
+            (
+                _parse_decimal_amount(v)
+                for k, v in verified_fields.items()
+                if str(k).lower() in {"settlement amount", "settlement_amount", "credited amount", "bank settlement", "bank settlement amount"}
+            ),
+            None,
+        )
+
+    base = {
+        "proposal_id": f"PROP-{incident_id}",
+        "exception_id": incident_id,
+        "proposal_type": "NOT_APPLICABLE",
+        "status": "NOT_APPLICABLE",
+        "verified_facts": [],
+        "proposed_amount": None,
+        "explanation": "No safe automated recovery proposal available.",
+        "recommended_action": get_recommended_action_by_type(exc_type, refs),
+        "confidence": "Low",
+        "limitations": ["No safe automated recovery proposal available."],
+        "requires_human_approval": True,
+        "evidence_refs": evidence_refs,
+    }
+
+    if isinstance(verified_fields, dict):
+        for key in [
+            "Order ID",
+            "Order Amount",
+            "Net Amount",
+            "Settlement Amount",
+            "Gross Amount",
+            "Settlement Batch",
+            "Currency",
+        ]:
+            if key in verified_fields and verified_fields[key] not in (None, "", "Not available in uploaded data"):
+                base["verified_facts"].append(f"{key}: {verified_fields[key]}")
+
+    if exc_type == "AMOUNT_MISMATCH" and order_amount is not None and net_amount is not None:
+        difference = abs(order_amount - net_amount)
+        if difference > 0.01:
+            base.update(
+                {
+                    "proposal_type": "POSSIBLE_GATEWAY_FEE_ADJUSTMENT",
+                    "status": "PROPOSED",
+                    "verified_facts": base["verified_facts"] or [
+                        f"Order amount {order_amount} and net amount {net_amount} captured in verified evidence."
+                    ],
+                    "proposed_amount": _format_currency_amount(difference),
+                    "explanation": (
+                        f"The verified difference between the order and net amount is {difference:.2f}. "
+                        "This is consistent with a gateway or fee deduction, but the engine has not automatically posted or reconciled it."
+                    ),
+                    "recommended_action": "Review gateway fee records and approve an adjusting entry only if independently verified.",
+                    "confidence": "High",
+                    "limitations": [
+                        "Proposal is advisory only. Human approval is required.",
+                        "The available evidence supports a fee-style delta, but does not prove the final accounting treatment.",
+                    ],
+                    "requires_human_approval": True,
+                }
+            )
+            return base
+
+    if exc_type in {"BATCH_SUM_MISMATCH_UNRESOLVED", "BATCH_SUM_MISMATCH_ISOLATED", "BROKEN_BATCH_LINK", "ORPHAN_SETTLEMENT"}:
+        if settlement_amount is not None and order_amount is not None:
+            residual = abs(settlement_amount - order_amount)
+            base.update(
+                {
+                    "proposal_type": "REVIEW_BATCH_SETTLEMENT_LINK",
+                    "status": "PROPOSED",
+                    "proposed_amount": _format_currency_amount(residual),
+                    "explanation": (
+                        "Verified settlement and order evidence indicate a residual amount in the batch. "
+                        "The recommendation is to review batch membership and seek confirmation before any adjustment is approved."
+                    ),
+                    "recommended_action": "Review settlement batch membership and confirm whether a missing or duplicate transaction caused the residual.",
+                    "confidence": "Medium",
+                    "limitations": [
+                        "Proposal is advisory only. Human approval is required.",
+                        "The current evidence identifies a likely residual, but does not prove the missing entry or duplicate scenario.",
+                    ],
+                    "requires_human_approval": True,
+                }
+            )
+            return base
+
+    base.update(
+        {
+            "proposal_type": "INSUFFICIENT_EVIDENCE_FOR_SAFE_RECOVERY",
+            "status": "INSUFFICIENT_EVIDENCE",
+            "explanation": (
+                "Insufficient evidence for a safe automated recovery proposal. The current deterministic evidence does not support a safe fee adjustment or batch-level recovery action."
+            ),
+            "recommended_action": get_recommended_action_by_type(exc_type, refs),
+            "confidence": "Low",
+            "limitations": [
+                "Insufficient evidence for safe recovery.",
+                "The available records do not isolate a single verifiable recovery action without operator review.",
+            ],
+            "requires_human_approval": True,
+        }
+    )
+    return base
+
+
 def _structured_fallback_for_exception(incident: dict) -> dict:
     exc_type = incident.get("type", "")
     refs = incident.get("references", [])

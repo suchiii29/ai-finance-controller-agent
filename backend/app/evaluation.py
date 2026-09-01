@@ -55,6 +55,19 @@ def evaluate_batch(result: BatchResult, ground_truth: list[dict[str, str]]) -> E
     recall = resolved_correct / actual_resolved if actual_resolved else 1.0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
 
+    processing_time_seconds = float(result.throughput.get("seconds", 0.0)) if isinstance(result.throughput, dict) else 0.0
+    if processing_time_seconds <= 0 and isinstance(result.throughput, dict):
+        records_per_second = float(result.throughput.get("records_per_second", 0.0) or 0.0)
+        if records_per_second > 0 and cases:
+            processing_time_seconds = cases / records_per_second
+    average_processing_time_per_record = (processing_time_seconds / cases) if cases and processing_time_seconds > 0 else 0.0
+    records_per_second = (
+        float(result.throughput.get("records_per_second", 0.0) or 0.0)
+        if isinstance(result.throughput, dict) and result.throughput.get("records_per_second") is not None
+        else (cases / processing_time_seconds if processing_time_seconds > 0 else 0.0)
+    )
+    false_positive_rate = (incorrect_auto_resolutions / predicted_resolved) if predicted_resolved else 0.0
+
     return EvaluationMetrics(
         total_cases_evaluated=cases,
         correctly_reconciled=resolved_correct,
@@ -69,4 +82,10 @@ def evaluate_batch(result: BatchResult, ground_truth: list[dict[str, str]]) -> E
             escalated_correct / actual_exceptions if actual_exceptions else 1.0
         ),
         ground_truth_cases=cases,
+        false_positive_count=incorrect_auto_resolutions,
+        false_positive_rate=false_positive_rate,
+        total_evaluated_decisions=cases,
+        processing_time_seconds=processing_time_seconds,
+        average_processing_time_per_record=average_processing_time_per_record,
+        records_per_second=records_per_second,
     )

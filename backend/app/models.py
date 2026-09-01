@@ -46,6 +46,21 @@ class OrderDecision(BaseModel):
     decided_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class RecoveryProposal(BaseModel):
+    proposal_id: str
+    exception_id: str
+    proposal_type: str
+    status: str
+    verified_facts: list[str] = Field(default_factory=list)
+    proposed_amount: str | None = None
+    explanation: str
+    recommended_action: str
+    confidence: str = "Medium"
+    limitations: list[str] = Field(default_factory=list)
+    requires_human_approval: bool = True
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
 class ExceptionRecord(BaseModel):
     exception_id: str
     scope: str
@@ -54,6 +69,7 @@ class ExceptionRecord(BaseModel):
     reason: str
     evidence: list[str] = Field(min_length=1)
     severity: str = "REVIEW"
+    proposed_resolution: RecoveryProposal | None = None
 
     # Used by one shared batch-level incident.
     affected_order_ids: list[str] | None = None
@@ -83,6 +99,12 @@ class EvaluationMetrics(BaseModel):
     safe_resolution_rate: float
     exception_escalation_accuracy: float
     ground_truth_cases: int
+    false_positive_count: int = 0
+    false_positive_rate: float | None = None
+    total_evaluated_decisions: int = 0
+    processing_time_seconds: float | None = None
+    average_processing_time_per_record: float | None = None
+    records_per_second: float | None = None
 
 
 class BatchControllerReport(BaseModel):

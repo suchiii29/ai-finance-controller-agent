@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from langchain_core.messages import ToolMessage
 
+from app.investigation import build_recovery_proposal_for_exception
 from app.llm import get_llm, is_llm_available
 
 from app.models import BatchControllerReport, ControllerOutcome, ControllerResponse, ControllerStatus
@@ -951,6 +952,9 @@ def run_batch_controller() -> BatchControllerReport:
     else:
         event("COMPLETED", "Completed batch with no unresolved incidents.")
 
+    for incident in priority:
+        incident["proposed_resolution"] = build_recovery_proposal_for_exception(incident)
+
     cross_exception_analysis = None
     if priority:
         from app.investigation import analyze_batch_exceptions, explain_cross_exception_patterns
@@ -981,6 +985,7 @@ def run_batch_controller() -> BatchControllerReport:
                 "affected_orders": incident.get("affected_orders", []),
                 "verified_fields": incident.get("verified_fields", {}),
                 "ai_investigation": exception_explanations.get(incident["exception_id"]),
+                "proposed_resolution": incident.get("proposed_resolution"),
             }
             for incident in priority
         ],
