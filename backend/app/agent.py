@@ -11,6 +11,7 @@ from app.llm import get_llm, is_llm_available
 
 from app.models import BatchControllerReport, ControllerOutcome, ControllerResponse, ControllerStatus
 from app.tools import (
+    analyze_batch_exceptions_tool,
     get_batch_details_tool,
     get_exception_details_tool,
     get_order_details_tool,
@@ -35,6 +36,7 @@ CONTROLLER_GOAL = (
 APPROVED_TOOLS: dict[str, Callable[..., Any]] = {
     "run_reconciliation": run_reconciliation_tool,
     "get_reconciliation_summary": get_reconciliation_summary_tool,
+    "analyze_batch_exceptions": analyze_batch_exceptions_tool,
     "get_priority_incidents": get_priority_incidents_tool,
     "get_exception_details": get_exception_details_tool,
     "get_order_details": get_order_details_tool,
@@ -49,6 +51,16 @@ steps. You are an investigation coordinator, not a payment or ledger system.
 
 Use the approved read-only tools to observe state and gather evidence. Choose
 the next tool based on the returned evidence; do not follow a fixed sequence.
+
+Approved tools:
+- get_reconciliation_summary: Get overall batch metrics and exception counts.
+- analyze_batch_exceptions: Analyze cross-record patterns across all exceptions.
+- get_priority_incidents: Get high-priority exceptions requiring review.
+- get_exception_details: Get detailed evidence for a specific exception.
+- get_order_details: Get reconciliation decision for a specific order.
+- get_batch_details: Get settlement batch details and linkage analysis.
+- get_transaction_details: Get gateway transaction and related evidence.
+
 Stop when the evidence is sufficient or when more evidence cannot establish a
 safe conclusion. You may call at most the tool-call limit supplied by the
 runtime. Never invent IDs, amounts, causes, or statuses. Never change or

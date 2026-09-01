@@ -453,6 +453,44 @@ def get_reconciliation_summary_tool():
     }
 
 
+# ============================================================
+# TOOL 8 — ANALYZE BATCH EXCEPTIONS (CROSS-RECORD PATTERNS)
+# ============================================================
+
+def analyze_batch_exceptions_tool():
+    """
+    Analyzes all exceptions in the current batch for cross-record patterns.
+    Returns verified pattern data suitable for AI synthesis.
+    
+    This is a bounded, read-only tool that cannot modify reconciliation decisions.
+    """
+    from app.investigation import analyze_batch_exceptions, explain_cross_exception_patterns
+    
+    # Get deterministic pattern analysis
+    pattern_data = analyze_batch_exceptions()
+    
+    # Get AI synthesis of patterns
+    ai_synthesis = explain_cross_exception_patterns(pattern_data)
+    
+    # Return unified response
+    analysis = pattern_data.get("pattern_analysis", {})
+    
+    return {
+        "status": pattern_data.get("status", "ANALYSIS_COMPLETE"),
+        "total_exceptions": analysis.get("total_exceptions", 0),
+        "exception_types": analysis.get("grouped_by_type", {}),
+        "batches_affected": analysis.get("grouped_by_batch", {}),
+        "related_orders": analysis.get("related_orders", []),
+        "verified_patterns": analysis.get("verified_patterns", []),
+        "ai_analysis_available": ai_synthesis.get("available", False),
+        "ai_summary": ai_synthesis.get("summary", ""),
+        "ai_cross_record_patterns": ai_synthesis.get("cross_record_patterns", []),
+        "ai_possible_causes": ai_synthesis.get("possible_operational_causes", []),
+        "ai_recommended_action": ai_synthesis.get("recommended_next_action", ""),
+        "ai_confidence": ai_synthesis.get("confidence_in_explanation", "MEDIUM"),
+    }
+
+
 _current_report = None
 
 

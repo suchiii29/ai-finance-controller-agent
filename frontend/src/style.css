@@ -22,6 +22,9 @@
   --status-red: #dc2626;
   --status-red-bg: #fee2e2;
 
+  --status-blue: #0284c7;
+  --status-purple: #9333ea;
+
   --border-color: #e2e8f0;
   --border-dark: #cbd5e1;
 
@@ -989,3 +992,49 @@ body {
 .mt-2 { margin-top: 8px; }
 .mt-4 { margin-top: 16px; }
 .mb-6 { margin-bottom: 24px; }
+
+/* AI INVESTIGATION SECTIONS */
+.ai-summary {
+  background-color: #f0f9ff;
+  border-left: 3px solid #0284c7;
+  padding: 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.ai-summary strong { color: var(--text-navy); }
+
+.ai-summary p { margin-top: 6px; color: var(--text-main); }
+
+.verified-block {
+  background-color: #f0fdf4;
+  border-left: 3px solid var(--status-green);
+  padding: 12px;
+  border-radius: 4px;
+  margin-bottom: 12px !important;
+}
+
+.verified-block ul { margin-top: 8px; color: var(--text-main); }
+
+.pattern-block {
+  background-color: #e0f2fe;
+  border-left: 3px solid #0284c7;
+  padding: 12px;
+  border-radius: 4px;
+  margin-bottom: 12px !important;
+}
+
+.pattern-block ul { margin-top: 8px; color: var(--text-main); }
+
+.hypothesis-block {
+  background-color: #faf5ff;
+  border-left: 3px solid #9333ea;
+  padding: 12px;
+  border-radius: 4px;
+  margin-bottom: 12px !important;
+}
+
+.hypothesis-block ul { margin-top: 8px; color: var(--text-main); }
+
+.hypothesis-block li { font-style: italic; opacity: 0.85; }

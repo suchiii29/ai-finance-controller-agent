@@ -4,6 +4,8 @@
 
 **FinanceOS is an AI-powered financial reconciliation agent that connects orders, payment gateway transactions, and bank settlements into a unified, auditable operations workflow. It automatically resolves safe financial matches using a deterministic rule engine while employing a bounded AI investigation agent to analyze verified evidence for exceptions. The system keeps financial decision authority in the deterministic engine and uses AI strictly for evidence-backed investigation and operator guidance.**
 
+> **Core philosophy:** "Knowing when not to automate is part of automation."
+
 ---
 
 ## 🚀 Submission Links
@@ -12,7 +14,7 @@
 https://ai-finance-controller-agent.vercel.app/
 
 ### 🎥 Demo Video
-**[Watch the FinanceOS Demo Video](YOUR_VIDEO_LINK_HERE)**
+**Placeholder for the final demo video:** [Add FinanceOS demo video URL here once recorded]
 
 ---
 
@@ -25,26 +27,44 @@ FinanceOS directly fulfills the AI Finance Controller mandate by providing a com
 3. **Deterministic Financial Authority:** Applies explicit, 5-stage rule precedence to authorize reconciliations without probabilistic guessing.
 4. **Measurable Safe Resolution:** Reconciles safe records automatically while measuring resolution throughput and accuracy.
 5. **Exception Detection & Escalation:** Flags ambiguous or mismatched records into an auditable exception queue.
-6. **Agentic AI Exception Investigation:** Deploys a bounded AI agent using read-only tools to inspect evidence, correlate records, and explain refusals.
+6. **Bounded AI Investigation:** Deploys a read-only AI agent to inspect verified evidence, correlate records, and explain refusals without overriding decisions.
 7. **Actionable Operator Guidance:** Recommends concrete next operational steps to assist human operators in resolving escalated cases.
 8. **Auditable Run Reports:** Generates downloadable, snapshot-in-time HTML audit reports with complete evidence trails and benchmark metrics.
 
 ---
 
-## 📊 Verified Benchmark
+## 📊 Demo Batch Outcome
 
-Results measured out-of-band against the canonical synthetic ground-truth dataset:
+FinanceOS's primary operational outcome for the live demo batch is measured as follows:
 
 | Metric | Measured Value | Meaning |
 |---|---|---|
-| **Synthetic Precision** | **100.0%** | Synthetic benchmark rule-consistency metric for the demo dataset |
-| **Synthetic Recall** | **100.0%** | Synthetic benchmark rule-consistency metric for the demo dataset |
-| **Synthetic F1 Score** | **100.0%** | Synthetic benchmark rule-consistency metric for the demo dataset |
-| **Safe Resolution Rate** | **63.3%** | 38 of 60 orders safely auto-reconciled |
-| **Escalated Orders** | **22** | Ambiguous cases escalated to human review |
-| **Benchmark Dataset** | **139 records** | 60 Orders, 63 Gateway Txns, 16 Bank Settlements |
+| **Orders Safely Reconciled** | **38 / 60** | Safe auto-resolution count |
+| **Escalated for Review** | **22** | Cases held for operator review |
+| **Safe Resolution Rate** | **63.3%** | Ratio of safe reconciliations to all orders |
+| **Canonical Financial Records** | **139** | Total records processed in the demo batch |
 
-*Note: Ground-truth benchmark metrics are evaluated out-of-band against the synthetic benchmark generated from the deterministic reconciliation rules. They validate rule consistency on that benchmark and do not demonstrate real-world generalization.*
+### 🧪 Evaluation Overview
+
+FinanceOS distinguishes three separate evaluation contexts:
+
+1. **Demo batch metrics** — the live operational outcome of the current batch.
+2. **Synthetic Rule-Consistency Benchmark** — a synthetic benchmark that measures consistency against a known rule-based ground truth.
+3. **Independent Adversarial Evaluation** — an independent, manually labeled validation suite covering difficult edge cases.
+
+#### Synthetic Rule-Consistency Benchmark
+
+| Metric | Measured Value | Meaning |
+|---|---|---|
+| **Synthetic Precision** | **100.0%** | Rule-consistency benchmark metric |
+| **Synthetic Recall** | **100.0%** | Rule-consistency benchmark metric |
+| **Synthetic F1 Score** | **100.0%** | Rule-consistency benchmark metric |
+
+*These metrics measure consistency against the synthetic benchmark and do not represent real-world generalization.*
+
+#### Independent Adversarial Evaluation
+
+The project includes a separate backend adversarial suite with manually labeled scenarios covering missing counterparts, duplicate keys, amount mismatches, negative amounts, currency mismatches, batch anomalies, and other edge cases. This evaluation is intentionally kept separate from the demo outcome and the synthetic benchmark.
 
 ---
 
@@ -93,9 +113,11 @@ When an order is escalated, FinanceOS deploys a bounded AI investigation agent (
 
 FinanceOS maintains a strict architectural firewall between financial decision authority and AI reasoning:
 
-* **Engine Authority:** The deterministic rule engine makes 100% of financial reconciliation decisions before AI investigation begins.
-* **Read-Only Tools:** Agent tools are strictly getters; the AI cannot write to the database, modify transactions, or alter reconciliation states.
-* **No Decision Override:** The AI agent cannot override an engine escalation or mark an unsafe record as reconciled.
+* **Deterministic reconciliation engine makes financial decisions.** The engine is the sole authority for deciding whether an order is reconciled or escalated.
+* **AI never overrides financial decisions.** The AI agent may investigate, explain, and recommend, but it cannot auto-reconcile or change a decision.
+* **AI is read-only.** Agent tools are strictly getters; the AI cannot write to the database, modify transactions, or alter reconciliation states.
+* **AI performs evidence-backed investigation and cross-record pattern synthesis.** It inspects verified evidence, correlates activity across related orders and batches, and summarizes likely operational causes while clearly separating facts, patterns, and hypotheses.
+* **AI recommendations remain grounded in verified evidence.** Hypotheses are explicit and never treated as financial facts.
 * **Ground-Truth Isolation:** Ground truth is strictly isolated in `app/evaluation.py` and never imported or accessed during controller inference.
 
 ---
@@ -116,7 +138,7 @@ If all 5 checks pass: `RECONCILED`. Otherwise: `ESCALATED`.
 
 ## 🛡️ Batch Integrity Safety
 
-FinanceOS treats settlement batches as holistic financial integrity groups rather than evaluating transactions in total isolation:
+FinanceOS treats settlement batches as holistic financial integrity groups rather than evaluating transactions in total isolation. It refuses to guess when evidence is incomplete:
 
 ```text
 Gateway Net Amounts (TXN-A + TXN-B + TXN-C)
@@ -197,10 +219,9 @@ If a bank credit discrepancy cannot be isolated to a specific transaction, Finan
 
 Ground-truth evaluation is performed **out-of-band** against the canonical synthetic benchmark (60 orders / 139 records):
 
-- **Synthetic Precision (100.0%):** Synthetic benchmark rule-consistency metric for the demo dataset; it validates deterministic consistency, not real-world generalization.
-- **Synthetic Recall (100.0%):** Synthetic benchmark rule-consistency metric for the demo dataset; it validates deterministic consistency, not real-world generalization.
-- **Synthetic F1 Score (100.0%):** Synthetic benchmark rule-consistency metric for the demo dataset; it validates deterministic consistency, not real-world generalization.
-- **Safe Resolution Rate (63.3%):** 38 of 60 orders safely reconciled; 22 intentionally escalated due to complex anomalies.
+- **Synthetic Rule-Consistency Benchmark:** Precision, Recall, and F1 measure deterministic consistency against the synthetic benchmark. They do not prove real-world generalization.
+- **Demo Batch Outcome:** 38 of 60 orders safely reconciled; 22 intentionally escalated due to complex anomalies.
+- **Independent Adversarial Evaluation:** Separate manually labeled edge-case suite validates outlier handling without claiming generalization beyond the tested scenarios.
 
 ---
 
@@ -243,9 +264,9 @@ FinanceOS generates downloadable, single-file HTML audit reports containing:
 ## 🎬 Demo Flow
 
 1. Open FinanceOS (`http://localhost:5173`).
-2. Click **Run Demo Batch** to execute the synthetic benchmark.
-3. Review high-level metrics (Safe Resolution Rate, Precision, Recall, F1).
-4. Inspect the Exception Register and click an escalated case to view its 3-tier evidence trail.
+2. Click **Run Demo Batch** to execute the demo reconciliation workflow.
+3. Review the primary demo batch metrics: 38 / 60 safely reconciled, 22 escalated, 63.3% safe resolution rate, and 139 processed records.
+4. Inspect the Exception Register and click an escalated case to view the evidence trail and AI investigation.
 5. Use **Ask FinanceOS** to query batch status via natural language.
 6. Click **Upload Custom CSV** to test custom data ingestion.
 7. Click **Download Run Report** for an auditable HTML snapshot.
@@ -348,15 +369,17 @@ source .venv/bin/activate
 PYTHONPATH=. pytest -v
 ```
 
-All 29 tests pass covering reconciliation rules, ingestion edge cases, agent tool execution, AI fallbacks, and evaluation isolation.
+Final suite status: **41 tests pass** covering reconciliation rules, ingestion edge cases, agent tool execution, AI fallbacks, evaluation isolation, and the independent adversarial validation suite.
 
 ---
 
 ## ⚠️ Limitations
 
-- **Synthetic Benchmark Data:** Default demo batch is generated with a fixed seed for audit reproducibility.
+- **Synthetic Benchmark Data:** Synthetic benchmark metrics validate deterministic consistency, not real-world generalization.
 - **In-Memory Batch State:** Current active batch is stored in backend server memory.
 - **Single-Tenant Prototype:** Built as a single-tenant operations console for Buildathon review.
+- **AI Hypotheses Are Not Financial Facts:** AI-suggested causes remain hypotheses unless independently verified.
+- **Escalation is a Safety Feature:** FinanceOS escalates uncertainty instead of guessing and auto-resolving unsafe financial data.
 
 ---
 ## Failure Recovery
@@ -402,9 +425,10 @@ FinanceOS prioritizes absolute financial safety over aggressive auto-resolution.
 | **Track** | Track 04 — AI Finance Controller |
 | **Financial Authority** | 100% Deterministic Rule Engine |
 | **AI Role** | Read-Only Exception Investigation Agent |
-| **Precision / Recall / F1** | 100.0% / 100.0% / 100.0% (Synthetic Benchmark) |
-| **Safe Resolution Rate** | 63.3% (38/60 orders safely reconciled) |
-| **Test Coverage** | 29 / 29 Pytest Suite Passing |
+| **Demo Batch Metrics** | 38 / 60 safely reconciled; 22 escalated; 63.3% safe resolution rate; 139 records processed |
+| **Synthetic Benchmark** | Precision / Recall / F1 shown separately as a rule-consistency benchmark only |
+| **Independent Adversarial Evaluation** | Separate manual edge-case validation suite |
+| **Test Coverage** | 41 / 41 Pytest Suite Passing |
 
 ---
 

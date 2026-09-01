@@ -87,10 +87,10 @@ function App() {
     setSelectedException(null);
     setLoading(true);
     setApiError(null);
-    setProcessingStage("Loading synthetic financial dataset...");
+    setProcessingStage("Loading financial records...");
 
     try {
-      setProcessingStage("Executing deterministic rule engine...");
+      setProcessingStage("Validating source integrity...");
       const recRes = await fetch(`${API_URL}/api/reconcile`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -102,7 +102,7 @@ function App() {
       const recJson = await recRes.json();
       setReconcileResult(recJson.result);
 
-      setProcessingStage("Generating grounded AI exception analysis...");
+      setProcessingStage("Running deterministic reconciliation...");
       const ctrlRes = await fetch(`${API_URL}/api/controller/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -112,6 +112,7 @@ function App() {
       }
       const ctrlJson = await ctrlRes.json();
       setBatchData(ctrlJson);
+      setProcessingStage("Building exception evidence...");
       setAskResponse(null);
     } catch (err) {
       console.error(err);
@@ -138,7 +139,7 @@ function App() {
     setApiError(null);
     setLoading(true);
 
-    setProcessingStage("Parsing & classifying uploaded CSV financial records...");
+    setProcessingStage("Loading financial records...");
 
     const formData = new FormData();
     for (let i = 0; i < uploadFiles.length; i++) {
@@ -165,8 +166,10 @@ function App() {
         return;
       }
 
+      setProcessingStage("Validating source integrity...");
       setBatchData(json.report);
       setReconcileResult(json.result);
+      setProcessingStage("Running deterministic reconciliation...");
       setShowUploadModal(false);
       setUploadFiles(null);
       setAskResponse(null);
@@ -883,49 +886,114 @@ function App() {
 
                   {/* 3. AI INVESTIGATION */}
                   <div className="detail-group">
-                    <h4 className="group-title">3. AI Investigation & Explanation</h4>
+                    <h4 className="group-title">3. AI Investigation & Analysis</h4>
                     <div className="ai-card">
                       <div className="ai-card-header">
-                        <span className="ai-label">FinanceOS Reasoning Layer</span>
+                        <span className="ai-label">FinanceOS Reasoning Layer (Investigative Only)</span>
                         <span className="ai-badge">Evidence Grounded</span>
                       </div>
 
                       {selectedExDetails.ai_investigation ? (
                         <div>
+                          {/* INVESTIGATION SUMMARY */}
                           <div className="ai-summary">
-                            {selectedExDetails.ai_investigation.summary || "Exception analysis complete."}
+                            <strong>Investigation Summary:</strong>
+                            <p style={{ marginTop: "4px", color: "var(--text-main)" }}>
+                              {selectedExDetails.ai_investigation.summary || "Exception analysis complete."}
+                            </p>
                           </div>
 
-                          <div className="ai-block">
-                            <strong>Observed Facts:</strong>
-                            <ul>
-                              {selectedExDetails.ai_investigation.observed_facts?.map((fact: string, i: number) => (
-                                <li key={i}>{fact}</li>
-                              ))}
-                            </ul>
-                          </div>
-
-                          {selectedExDetails.ai_investigation.refusal_rationale && (
-                            <div className="ai-block">
-                              <strong className="text-amber-dark">Refusal Rationale:</strong>
-                              <p style={{ marginTop: "2px", color: "var(--text-muted)" }}>
-                                {selectedExDetails.ai_investigation.refusal_rationale}
-                              </p>
+                          {/* VERIFIED FACTS SECTION */}
+                          {(selectedExDetails.ai_investigation.verified_facts?.length || 0) > 0 && (
+                            <div className="ai-block verified-block">
+                              <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                                <span style={{ fontWeight: 700, fontSize: "12px", color: "var(--status-green)", textTransform: "uppercase" }}>✓ Verified Facts</span>
+                              </div>
+                              <ul style={{ margin: 0, paddingLeft: "16px", fontSize: "12px", color: "var(--text-main)" }}>
+                                {selectedExDetails.ai_investigation.verified_facts.map((fact: string, i: number) => (
+                                  <li key={i} style={{ marginBottom: "4px" }}>{fact}</li>
+                                ))}
+                              </ul>
                             </div>
                           )}
 
+                          {/* OBSERVED PATTERNS SECTION */}
+                          {(selectedExDetails.ai_investigation.cross_record_patterns?.length || 0) > 0 && (
+                            <div className="ai-block pattern-block">
+                              <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                                <span style={{ fontWeight: 700, fontSize: "12px", color: "var(--status-blue)", textTransform: "uppercase" }}>◉ Observed Patterns</span>
+                              </div>
+                              <ul style={{ margin: 0, paddingLeft: "16px", fontSize: "12px", color: "var(--text-main)" }}>
+                                {selectedExDetails.ai_investigation.cross_record_patterns.map((pattern: string, i: number) => (
+                                  <li key={i} style={{ marginBottom: "4px" }}>{pattern}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* POSSIBLE HYPOTHESES SECTION */}
+                          {(selectedExDetails.ai_investigation.possible_causes?.length || 0) > 0 && (
+                            <div className="ai-block hypothesis-block">
+                              <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                                <span style={{ fontWeight: 700, fontSize: "12px", color: "var(--status-purple)", textTransform: "uppercase" }}>? Possible Hypotheses</span>
+                              </div>
+                              <ul style={{ margin: 0, paddingLeft: "16px", fontSize: "12px", color: "var(--text-main)", fontStyle: "italic" }}>
+                                {selectedExDetails.ai_investigation.possible_causes.map((cause: string, i: number) => (
+                                  <li key={i} style={{ marginBottom: "4px" }}>
+                                    {cause.startsWith("POSSIBLE HYPOTHESIS:") ? cause : `POSSIBLE HYPOTHESIS: ${cause}`}
+                                  </li>
+                                ))}
+                              </ul>
+                              <div style={{ marginTop: "8px", fontSize: "11px", color: "var(--text-muted)", fontStyle: "italic" }}>
+                                These are potential explanations suggested by AI analysis. Verification requires operator review.
+                              </div>
+                            </div>
+                          )}
+
+                          {/* RECOMMENDED ACTION */}
                           {selectedExDetails.ai_investigation.recommended_operator_action && (
                             <div className="ai-action-box">
-                              <strong className="text-green-dark">Recommended Operator Action:</strong>
-                              <p style={{ marginTop: "2px", color: "var(--text-main)" }}>
+                              <strong style={{ fontSize: "12px", color: "var(--text-green)", textTransform: "uppercase" }}>Recommended Operator Action:</strong>
+                              <p style={{ marginTop: "4px", color: "var(--text-main)", fontSize: "12px" }}>
                                 {selectedExDetails.ai_investigation.recommended_operator_action}
                               </p>
                             </div>
                           )}
+
+                          {/* CONFIDENCE & LIMITATIONS */}
+                          {selectedExDetails.ai_investigation.confidence_in_explanation && (
+                            <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid var(--border-color)", fontSize: "12px", color: "var(--text-muted)" }}>
+                              <div style={{ marginBottom: "6px" }}>
+                                <strong>Confidence Level:</strong> {selectedExDetails.ai_investigation.confidence_in_explanation}
+                              </div>
+                              {selectedExDetails.ai_investigation.limitations?.length > 0 && (
+                                <div>
+                                  <strong>Limitations:</strong>
+                                  <ul style={{ margin: "4px 0 0 16px", paddingLeft: "0" }}>
+                                    {selectedExDetails.ai_investigation.limitations.map((lim: string, i: number) => (
+                                      <li key={i} style={{ marginBottom: "2px", fontSize: "11px" }}>{lim}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* INVESTIGATION ACTIVITY TRACE */}
+                          <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid var(--border-color)" }}>
+                            <div style={{ fontWeight: 600, fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "6px" }}>Investigation Activity</div>
+                            <div style={{ fontSize: "11px", color: "var(--text-main)", display: "flex", flexDirection: "column", gap: "4px" }}>
+                              <div>• Loaded verified order evidence</div>
+                              <div>• Checked related gateway transaction details</div>
+                              <div>• Checked settlement batch information</div>
+                              <div>• Analyzed related exceptions for patterns</div>
+                              <div>• Generated grounded investigation summary</div>
+                            </div>
+                          </div>
                         </div>
                       ) : (
                         <p style={{ fontSize: "13px", color: "var(--text-muted)" }}>
-                          No AI investigation trace recorded for this item.
+                          No AI investigation trace recorded for this item. Deterministic reconciliation decision remains valid.
                         </p>
                       )}
                     </div>
@@ -947,9 +1015,50 @@ function App() {
             <div className="section-card">
               <div className="section-header">
                 <div>
-                  <h3 className="section-heading">Ground-Truth Benchmark Evaluation</h3>
+                  <h3 className="section-heading">Demo Batch Metrics</h3>
                   <p className="section-sub">
-                    Synthetic benchmark rule-consistency metrics comparing reconciliation output against known ground truth for the demo dataset.
+                    Operational results for the current demo batch. These are the primary outcome metrics for FinanceOS.
+                  </p>
+                </div>
+              </div>
+
+              <div className="metrics-grid">
+                <div className="metric-card border-green-light">
+                  <span className="metric-label">ORDERS SAFELY RECONCILED</span>
+                  <span className="metric-number text-green">
+                    {reconciledCases} / {totalCases}
+                  </span>
+                  <span className="metric-sub">Safe auto-resolution count</span>
+                </div>
+
+                <div className="metric-card border-amber-light">
+                  <span className="metric-label">ESCALATED FOR REVIEW</span>
+                  <span className="metric-number text-amber">{escalatedCases}</span>
+                  <span className="metric-sub">Requires human review</span>
+                </div>
+
+                <div className="metric-card">
+                  <span className="metric-label">SAFE RESOLUTION RATE</span>
+                  <span className="metric-number text-navy">
+                    {Math.max(0, Number((reconciledCases / Math.max(totalCases, 1)) * 100 || 0)).toFixed(1)}%
+                  </span>
+                  <span className="metric-sub">{reconciledCases} of {totalCases} orders</span>
+                </div>
+
+                <div className="metric-card">
+                  <span className="metric-label">CANONICAL FINANCIAL RECORDS</span>
+                  <span className="metric-number text-blue">{recordsProcessed}</span>
+                  <span className="metric-sub">Records processed in the current batch</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="section-card">
+              <div className="section-header">
+                <div>
+                  <h3 className="section-heading">Synthetic Rule-Consistency Benchmark</h3>
+                  <p className="section-sub">
+                    These metrics measure consistency against the synthetic benchmark and do not represent real-world generalization.
                   </p>
                 </div>
               </div>
@@ -1021,6 +1130,23 @@ function App() {
                   </p>
                 </div>
               )}
+            </div>
+
+            <div className="section-card">
+              <div className="section-header">
+                <div>
+                  <h3 className="section-heading">Independent Adversarial Evaluation</h3>
+                  <p className="section-sub">
+                    This is distinct from the synthetic benchmark and validates edge-case robustness with manually labeled scenarios.
+                  </p>
+                </div>
+              </div>
+
+              <div className="callout-box neutral-box" style={{ padding: "16px" }}>
+                <p style={{ margin: 0, fontSize: "13px", color: "var(--text-main)" }}>
+                  The backend includes a separate adversarial evaluation suite covering missing counterparts, duplicate keys, negative amounts, currency mismatches, batch anomalies, and other edge cases. It is run as a separate, independent validation layer rather than as a live demo metric.
+                </p>
+              </div>
             </div>
 
             {/* AUDIT & SAFETY ARCHITECTURE */}

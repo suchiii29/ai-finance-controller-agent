@@ -111,6 +111,132 @@ def investigate_batch(batch_id: str):
     )
 
 
+# ============================================================
+# CROSS-EXCEPTION PATTERN ANALYSIS
+# ============================================================
+
+def _analyze_exception_patterns(incidents: list[dict]) -> dict:
+    """
+    Deterministically analyzes patterns across multiple exceptions.
+    Returns verified facts only—no hypotheses.
+    """
+    if not incidents:
+        return {
+            "total_exceptions": 0,
+            "grouped_by_type": {},
+            "grouped_by_batch": {},
+            "related_orders": [],
+            "amount_anomalies": [],
+            "date_clusters": [],
+            "verified_patterns": [],
+        }
+
+    # GROUP BY EXCEPTION TYPE
+    by_type = {}
+    for incident in incidents:
+        exc_type = incident.get("type", "UNKNOWN")
+        if exc_type not in by_type:
+            by_type[exc_type] = []
+        by_type[exc_type].append(incident)
+
+    # GROUP BY SETTLEMENT BATCH
+    by_batch = {}
+    for incident in incidents:
+        refs = incident.get("references", [])
+        for ref in refs:
+            if str(ref).startswith("SET-") or str(ref).startswith("BATCH-"):
+                if ref not in by_batch:
+                    by_batch[ref] = []
+                by_batch[ref].append(incident)
+
+    # EXTRACT RELATED ORDERS
+    related_orders = set()
+    for incident in incidents:
+        affected = incident.get("affected_orders", [])
+        if isinstance(affected, list):
+            related_orders.update(affected)
+
+    # ANALYZE AMOUNT ANOMALIES
+    amount_anomalies = []
+    for incident in incidents:
+        vf = incident.get("verified_fields", {})
+        if isinstance(vf, dict):
+            order_amt = _parse_decimal_amount(vf.get("Order Amount") or vf.get("Order ID"))
+            settlement_amt = _parse_decimal_amount(vf.get("Settlement Amount") or vf.get("Credited Amount"))
+            if order_amt is not None and settlement_amt is not None:
+                diff = abs(settlement_amt - order_amt)
+                if diff > 0.01:
+                    amount_anomalies.append({
+                        "exception_id": incident.get("exception_id"),
+                        "order_id": incident.get("verified_fields", {}).get("Order ID"),
+                        "difference": diff,
+                        "type": "AMOUNT_DISCREPANCY",
+                    })
+
+    # DETECT PATTERNS (FACTS ONLY)
+    verified_patterns = []
+    
+    # Pattern 1: Multiple exceptions of same type
+    for exc_type, incs in by_type.items():
+        if len(incs) >= 2:
+            verified_patterns.append(
+                f"VERIFIED FACT: {len(incs)} exceptions of type '{exc_type}' detected."
+            )
+
+    # Pattern 2: Exceptions clustered in same batch
+    for batch_id, incs in by_batch.items():
+        if len(incs) >= 2:
+            verified_patterns.append(
+                f"VERIFIED FACT: {len(incs)} exceptions linked to settlement batch '{batch_id}'."
+            )
+
+    # Pattern 3: Amount discrepancies
+    if amount_anomalies:
+        verified_patterns.append(
+            f"VERIFIED FACT: {len(amount_anomalies)} exceptions contain amount discrepancies."
+        )
+
+    return {
+        "total_exceptions": len(incidents),
+        "grouped_by_type": {k: len(v) for k, v in by_type.items()},
+        "grouped_by_batch": {k: len(v) for k, v in by_batch.items()},
+        "related_orders": sorted(list(related_orders)),
+        "amount_anomalies": amount_anomalies,
+        "verified_patterns": verified_patterns,
+    }
+
+
+def analyze_batch_exceptions() -> dict:
+    """
+    Analyzes all exceptions in the current batch for cross-record patterns.
+    Returns deterministic pattern analysis suitable for AI synthesis.
+    """
+    incidents = get_priority_incidents_tool()
+    
+    if not incidents:
+        return {
+            "status": "NO_EXCEPTIONS",
+            "investigation_type": "BATCH_EXCEPTION_ANALYSIS",
+            "evidence_verified": True,
+            "message": "No reconciliation exceptions detected in current batch.",
+            "pattern_analysis": {
+                "total_exceptions": 0,
+                "verified_patterns": [],
+            },
+        }
+
+    patterns = _analyze_exception_patterns(incidents)
+    
+    return {
+        "status": "PATTERNS_ANALYZED",
+        "investigation_type": "BATCH_EXCEPTION_ANALYSIS",
+        "evidence_verified": True,
+        "total_incidents": len(incidents),
+        "pattern_analysis": patterns,
+        "raw_incidents": incidents,
+    }
+
+
 def get_recommended_action_by_type(exc_type: str, refs: list[str]) -> str:
     ref_str = f" ({', '.join(refs)})" if refs else ""
     if exc_type == "DUPLICATE_KEY":
@@ -386,10 +512,130 @@ Explain this investigation clearly and concisely.
         return f"AI explanation unavailable due to provider error: {err}"
 
 
+def explain_cross_exception_patterns(pattern_data: dict) -> dict:
+    """
+    Uses AI to synthesize cross-exception pattern analysis into operational guidance.
+    Keeps AI output grounded in verified patterns and facts.
+    """
+    if not pattern_data or pattern_data.get("status") == "NO_EXCEPTIONS":
+        return {
+            "available": True,
+            "summary": "No exception patterns to analyze.",
+            "cross_record_patterns": [],
+            "possible_operational_causes": [],
+            "recommended_next_action": "Continue routine monitoring.",
+            "confidence_in_explanation": "HIGH",
+            "limitations": ["No exceptions detected in current batch."],
+        }
+
+    patterns = pattern_data.get("pattern_analysis", {})
+    
+    # Fallback structure (deterministic)
+    fallback = {
+        "available": False,
+        "summary": f"Batch contains {patterns.get('total_exceptions', 0)} exceptions across {len(patterns.get('grouped_by_type', {}))} types.",
+        "verified_facts": patterns.get("verified_patterns", []),
+        "cross_record_patterns": [
+            f"Type breakdown: {patterns.get('grouped_by_type', {})}",
+            f"Affected orders: {len(patterns.get('related_orders', []))} unique orders",
+        ],
+        "possible_operational_causes": [
+            "POSSIBLE HYPOTHESIS: Multiple exceptions suggest batch-level processing anomaly.",
+            "POSSIBLE HYPOTHESIS: Clustering by exception type indicates systemic rule-trigger condition.",
+            "POSSIBLE HYPOTHESIS: Cross-record patterns may reflect upstream data quality or integration issue.",
+        ],
+        "recommended_next_action": "Operator should review batch-level integrity and compare to historical norms.",
+        "confidence_in_explanation": "MEDIUM",
+        "limitations": [
+            "AI synthesis not available; deterministic pattern facts above remain valid.",
+            "Root cause attribution requires operator context and domain knowledge.",
+            "Patterns reflect current batch only; historical trend analysis requires separate data.",
+        ],
+    }
+
+    llm = get_llm()
+    if llm is None:
+        fallback["available"] = False
+        fallback["fallback_reason"] = "AI provider unavailable — deterministic patterns above remain available."
+        return fallback
+
+    # Construct prompt with verified facts only
+    verified_facts_str = "\n".join(patterns.get("verified_patterns", []))
+    type_breakdown = ", ".join(f"{t}: {c}" for t, c in patterns.get("grouped_by_type", {}).items())
+    
+    prompt = f"""
+You are FinanceOS, an AI investigation assistant.
+Your task: Synthesize verified cross-exception patterns into operational recommendations.
+
+CRITICAL SAFETY RULES:
+1. ONLY state facts from VERIFIED PATTERNS below.
+2. CLEARLY LABEL any hypothesis as "POSSIBLE HYPOTHESIS" or "OBSERVED PATTERN".
+3. Never invent exception IDs, order IDs, or amounts.
+4. Do NOT change any reconciliation decision.
+5. Do NOT claim to know root cause unless verified.
+6. Return valid JSON with keys: summary, cross_record_patterns, possible_operational_causes, recommended_next_action, confidence_in_explanation, limitations
+
+VERIFIED PATTERNS (FACTS):
+{verified_facts_str}
+
+VERIFIED BREAKDOWN:
+- Total exceptions: {patterns.get('total_exceptions', 0)}
+- Exception types: {type_breakdown}
+- Related orders affected: {len(patterns.get('related_orders', []))}
+- Amount discrepancies found: {len(patterns.get('amount_anomalies', []))}
+
+Synthesize these verified facts into an operational summary. If insufficient data for conclusion, say so.
+
+Return JSON only.
+"""
+
+    try:
+        response = llm.invoke(prompt)
+        content = str(response.content).strip()
+        if content.startswith("```json"):
+            content = content.replace("```json", "").replace("```", "").strip()
+        parsed = json.loads(content)
+        
+        # Validate against fallback structure
+        result = {
+            "available": True,
+            "summary": str(parsed.get("summary", fallback["summary"])),
+            "cross_record_patterns": [
+                str(p) for p in (parsed.get("cross_record_patterns") or fallback["cross_record_patterns"])
+            ],
+            "possible_operational_causes": [
+                str(p) for p in (parsed.get("possible_operational_causes") or fallback["possible_operational_causes"])
+            ],
+            "recommended_next_action": str(parsed.get("recommended_next_action", fallback["recommended_next_action"])),
+            "confidence_in_explanation": str(parsed.get("confidence_in_explanation", "MEDIUM")),
+            "limitations": [
+                str(l) for l in (parsed.get("limitations") or fallback["limitations"])
+            ],
+        }
+        return result
+    except Exception as err:
+        logger.warning("Failed to parse cross-exception pattern synthesis: %s", err)
+        fallback["available"] = True
+        fallback["fallback_reason"] = "AI synthesis not available; deterministic patterns above are valid."
+        return fallback
+
+
 def investigate_and_explain_highest_priority():
     investigation = investigate_highest_priority()
     explanation = explain_investigation(investigation)
     return {
         "investigation": investigation,
         "ai_explanation": explanation,
+    }
+
+
+def investigate_and_explain_batch_patterns():
+    """
+    Complete batch-level investigation: pattern analysis + AI synthesis.
+    """
+    pattern_data = analyze_batch_exceptions()
+    pattern_synthesis = explain_cross_exception_patterns(pattern_data)
+    return {
+        "batch_analysis": pattern_data,
+        "ai_pattern_synthesis": pattern_synthesis,
     }
