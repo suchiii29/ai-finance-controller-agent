@@ -2,7 +2,7 @@
 
 > **Razorpay AI Buildathon 2026 · Track 04: AI Finance Controller**
 
-**FinanceOS is an AI-powered financial reconciliation agent that connects orders, payment gateway transactions, and bank settlements into a unified, auditable operations workflow. It automatically resolves safe financial matches using a deterministic rule engine while employing a bounded AI investigation agent to analyze verified evidence for exceptions. The system keeps financial decision authority in the deterministic engine and uses AI strictly for evidence-backed investigation and operator guidance.**
+**FinanceOS is a correctness-first financial reconciliation controller that links orders, payment-gateway transactions, and bank settlements into a unified, auditable workflow. Deterministic systems decide financial outcomes. AI investigates, synthesizes patterns, explains evidence, and recommends human action.**
 
 > **Core philosophy:** "Knowing when not to automate is part of automation."
 
@@ -44,6 +44,8 @@ FinanceOS's primary operational outcome for the live demo batch is measured as f
 | **Safe Resolution Rate** | **63.3%** | Ratio of safe reconciliations to all orders |
 | **Canonical Financial Records** | **139** | Total records processed in the demo batch |
 
+These are the live primary outcome metrics shown in the app and the demo narrative. The deterministic engine remains the financial authority; the AI layer is read-only and investigative.
+
 ### 🧪 Evaluation Overview
 
 FinanceOS distinguishes three separate evaluation contexts:
@@ -54,13 +56,15 @@ FinanceOS distinguishes three separate evaluation contexts:
 
 #### Synthetic Rule-Consistency Benchmark
 
+These metrics are reported separately from the live demo outcome and are not the primary submission narrative.
+
 | Metric | Measured Value | Meaning |
 |---|---|---|
-| **Synthetic Precision** | **100.0%** | Rule-consistency benchmark metric |
-| **Synthetic Recall** | **100.0%** | Rule-consistency benchmark metric |
-| **Synthetic F1 Score** | **100.0%** | Rule-consistency benchmark metric |
+| **Synthetic Precision** | **100.0%** | Benchmark consistency against the synthetic rule-ground-truth |
+| **Synthetic Recall** | **100.0%** | Benchmark consistency against the synthetic rule-ground-truth |
+| **Synthetic F1 Score** | **100.0%** | Benchmark consistency against the synthetic rule-ground-truth |
 
-*These metrics measure consistency against the synthetic benchmark and do not represent real-world generalization.*
+*These values measure benchmark consistency only and do not represent general real-world accuracy claims.*
 
 #### Independent Adversarial Evaluation
 

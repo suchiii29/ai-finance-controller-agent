@@ -183,6 +183,15 @@ def test_batch_controller_processes_all_cases_and_never_takes_action():
     assert "NEEDS_HUMAN_REVIEW" in states
 
 
+def test_batch_controller_includes_cross_exception_analysis():
+    report = agent.run_batch_controller()
+
+    assert report.cross_exception_analysis is not None
+    assert isinstance(report.cross_exception_analysis, dict)
+    assert "priority_assessment" in report.cross_exception_analysis
+    assert "possible_hypotheses" in report.cross_exception_analysis
+
+
 # ============================================================
 # Ask FinanceOS: Broad Operational Query & Missing Record Tests
 # ============================================================
@@ -217,6 +226,16 @@ def test_ask_financeos_operational_summary_variant():
     assert res["evidence_verified"] is True
     assert res["type"] == "OPERATIONAL_SUMMARY"
     assert "Overall Batch Outcome" in res["answer"]
+
+
+def test_ask_financeos_cross_exception_pattern_query():
+    """Pattern queries should return the cross-exception AI analysis frame."""
+    set_demo_batch()
+    res = ask_finance_agent("Do these discrepancies appear related?")
+
+    assert res["evidence_verified"] is True
+    assert res["type"] == "CROSS_EXCEPTION_ANALYSIS"
+    assert "AI Cross-Exception Investigation" in res["answer"]
 
 
 def test_ask_financeos_missing_order_returns_clear_not_found():

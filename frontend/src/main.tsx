@@ -54,6 +54,7 @@ interface BatchReport {
   financial_action_taken: boolean;
   is_custom_batch?: boolean;
   ingestion_summary?: IngestionSummary;
+  cross_exception_analysis?: any;
   evaluation?: EvaluationMetrics;
 }
 
@@ -738,6 +739,53 @@ function App() {
                 </div>
               )}
             </div>
+
+            {batchData?.cross_exception_analysis && (
+              <div className="section-card">
+                <div className="section-header">
+                  <div>
+                    <h3 className="section-heading">AI Cross-Exception Investigation</h3>
+                    <p className="section-sub">
+                      Read-only synthesis across escalated records. The deterministic engine still decides financial outcomes.
+                    </p>
+                  </div>
+                  <span className="tag review">
+                    {batchData.cross_exception_analysis.priority_assessment?.priority || "MEDIUM"}
+                  </span>
+                </div>
+
+                <div className="callout-box info-box" style={{ marginBottom: "12px" }}>
+                  <strong>Priority assessment:</strong> {batchData.cross_exception_analysis.priority_assessment?.reason || "Cross-record pattern review complete."}
+                </div>
+
+                <div style={{ display: "grid", gap: "10px" }}>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "6px" }}>Verified Facts</div>
+                    <ul style={{ margin: 0, paddingLeft: "16px", fontSize: "12px" }}>
+                      {(batchData.cross_exception_analysis.verified_facts || []).slice(0, 4).map((fact: string, i: number) => (
+                        <li key={i}>{fact}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "6px" }}>Observed Patterns</div>
+                    <ul style={{ margin: 0, paddingLeft: "16px", fontSize: "12px" }}>
+                      {(batchData.cross_exception_analysis.observed_patterns || []).slice(0, 4).map((pattern: string, i: number) => (
+                        <li key={i}>{pattern}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "6px" }}>Possible Hypotheses</div>
+                    <ul style={{ margin: 0, paddingLeft: "16px", fontSize: "12px" }}>
+                      {(batchData.cross_exception_analysis.possible_hypotheses || []).slice(0, 4).map((hyp: string, i: number) => (
+                        <li key={i}>{hyp}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* PREVIEW OF TOP EXCEPTIONS */}
             <div className="section-card">

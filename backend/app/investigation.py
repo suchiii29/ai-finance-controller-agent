@@ -512,6 +512,74 @@ Explain this investigation clearly and concisely.
         return f"AI explanation unavailable due to provider error: {err}"
 
 
+def _as_list(value, fallback):
+    if value is None:
+        return list(fallback)
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if isinstance(value, tuple):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
+def _determine_priority(patterns: dict) -> dict:
+    total = patterns.get("total_exceptions", 0)
+    grouped_by_type = patterns.get("grouped_by_type", {})
+    grouped_by_batch = patterns.get("grouped_by_batch", {})
+    amount_anomalies = patterns.get("amount_anomalies", [])
+    max_type_count = max(grouped_by_type.values(), default=0)
+    max_batch_count = max(grouped_by_batch.values(), default=0)
+
+    if total == 0:
+        return {"priority": "LOW", "reason": "No unresolved exceptions were detected in the current batch."}
+    if total >= 10 or max_type_count >= 4 or max_batch_count >= 3 or len(amount_anomalies) >= 3:
+        return {
+            "priority": "HIGH",
+            "reason": "Multiple exceptions are concentrated in a narrow set of rules, batches, or amount anomalies and should be reviewed first.",
+        }
+    if total >= 4 or max_type_count >= 2 or max_batch_count >= 2:
+        return {
+            "priority": "MEDIUM",
+            "reason": "The batch shows operational clustering but no single dominant root cause is yet verified.",
+        }
+    return {
+        "priority": "LOW",
+        "reason": "The exception pattern is sparse and does not currently indicate a high-operational-risk cluster.",
+    }
+
+
+def _validate_cross_exception_analysis(raw_data: dict, fallback: dict) -> dict:
+    if not isinstance(raw_data, dict):
+        return fallback
+
+    validated = dict(fallback)
+    validated["summary"] = str(raw_data.get("summary") or fallback["summary"])
+    validated["verified_facts"] = _as_list(raw_data.get("verified_facts") or fallback["verified_facts"], fallback["verified_facts"])
+    validated["observed_patterns"] = _as_list(raw_data.get("observed_patterns") or raw_data.get("cross_record_patterns") or fallback["observed_patterns"], fallback["observed_patterns"])
+    validated["possible_hypotheses"] = _as_list(raw_data.get("possible_hypotheses") or raw_data.get("possible_operational_causes") or fallback["possible_hypotheses"], fallback["possible_hypotheses"])
+    validated["recommended_actions"] = _as_list(raw_data.get("recommended_actions") or raw_data.get("recommended_next_action") or fallback["recommended_actions"], fallback["recommended_actions"])
+    validated["limitations"] = _as_list(raw_data.get("limitations") or fallback["limitations"], fallback["limitations"])
+    priority_obj = raw_data.get("priority_assessment") or fallback["priority_assessment"]
+    if isinstance(priority_obj, dict):
+        validated["priority_assessment"] = {
+            "priority": str(priority_obj.get("priority") or fallback["priority_assessment"]["priority"]),
+            "reason": str(priority_obj.get("reason") or fallback["priority_assessment"]["reason"]),
+        }
+    else:
+        validated["priority_assessment"] = {
+            "priority": str(priority_obj or fallback["priority_assessment"]["priority"]),
+            "reason": fallback["priority_assessment"]["reason"],
+        }
+    validated["activity_trace"] = _as_list(raw_data.get("activity_trace") or fallback["activity_trace"], fallback["activity_trace"])
+    for idx, item in enumerate(validated["possible_hypotheses"]):
+        if not item.upper().startswith("POSSIBLE HYPOTHESIS:"):
+            validated["possible_hypotheses"][idx] = f"POSSIBLE HYPOTHESIS: {item}"
+    for idx, item in enumerate(validated["observed_patterns"]):
+        if not item.upper().startswith("OBSERVED PATTERN:"):
+            validated["observed_patterns"][idx] = f"OBSERVED PATTERN: {item}"
+    return validated
+
+
 def explain_cross_exception_patterns(pattern_data: dict) -> dict:
     """
     Uses AI to synthesize cross-exception pattern analysis into operational guidance.
@@ -521,103 +589,133 @@ def explain_cross_exception_patterns(pattern_data: dict) -> dict:
         return {
             "available": True,
             "summary": "No exception patterns to analyze.",
-            "cross_record_patterns": [],
-            "possible_operational_causes": [],
-            "recommended_next_action": "Continue routine monitoring.",
-            "confidence_in_explanation": "HIGH",
+            "verified_facts": [],
+            "observed_patterns": [],
+            "possible_hypotheses": [],
+            "priority_assessment": {"priority": "LOW", "reason": "No unresolved exceptions were detected in the current batch."},
+            "recommended_actions": ["Continue routine monitoring."],
             "limitations": ["No exceptions detected in current batch."],
+            "activity_trace": [
+                "Loaded verified exception records.",
+                "Grouped records by exception type and settlement batch.",
+                "No recurring batch clusters were found.",
+                "Generated a no-op grounded investigation summary.",
+            ],
         }
 
     patterns = pattern_data.get("pattern_analysis", {})
-    
-    # Fallback structure (deterministic)
+    type_breakdown = patterns.get("grouped_by_type", {})
+    amount_anomalies = patterns.get("amount_anomalies", [])
+    verified_facts = patterns.get("verified_patterns", [])
+    priority = _determine_priority(patterns)
+
     fallback = {
         "available": False,
-        "summary": f"Batch contains {patterns.get('total_exceptions', 0)} exceptions across {len(patterns.get('grouped_by_type', {}))} types.",
-        "verified_facts": patterns.get("verified_patterns", []),
-        "cross_record_patterns": [
-            f"Type breakdown: {patterns.get('grouped_by_type', {})}",
-            f"Affected orders: {len(patterns.get('related_orders', []))} unique orders",
+        "summary": f"Batch contains {patterns.get('total_exceptions', 0)} exceptions across {len(type_breakdown)} types.",
+        "verified_facts": verified_facts,
+        "observed_patterns": [
+            f"OBSERVED PATTERN: Type breakdown: {type_breakdown}",
+            f"OBSERVED PATTERN: Affected orders: {len(patterns.get('related_orders', []))} unique orders",
         ],
-        "possible_operational_causes": [
-            "POSSIBLE HYPOTHESIS: Multiple exceptions suggest batch-level processing anomaly.",
-            "POSSIBLE HYPOTHESIS: Clustering by exception type indicates systemic rule-trigger condition.",
-            "POSSIBLE HYPOTHESIS: Cross-record patterns may reflect upstream data quality or integration issue.",
+        "possible_hypotheses": [
+            "POSSIBLE HYPOTHESIS: Multiple exceptions suggest a batch-level processing anomaly.",
+            "POSSIBLE HYPOTHESIS: Clustering by exception type indicates a systemic rule-trigger condition.",
+            "POSSIBLE HYPOTHESIS: Cross-record patterns may reflect a settlement or data quality issue upstream.",
         ],
-        "recommended_next_action": "Operator should review batch-level integrity and compare to historical norms.",
-        "confidence_in_explanation": "MEDIUM",
+        "priority_assessment": priority,
+        "recommended_actions": [
+            "Review the highest-volume exception type and settlement batch before any consequential operator action.",
+            "Compare batch totals and linked records to verify whether the issue is concentrated in one settlement flow.",
+        ],
         "limitations": [
             "AI synthesis not available; deterministic pattern facts above remain valid.",
             "Root cause attribution requires operator context and domain knowledge.",
-            "Patterns reflect current batch only; historical trend analysis requires separate data.",
+            "Patterns reflect the current batch only and do not prove a systemic issue.",
+        ],
+        "activity_trace": [
+            "Loaded verified exception records.",
+            "Grouped records by exception type and settlement batch.",
+            "Identified recurring clusters across the current batch.",
+            "Generated grounded investigation hypotheses without altering reconciliation decisions.",
+            "Ranked operator priorities based on volume and concentration.",
         ],
     }
 
     llm = get_llm()
     if llm is None:
         fallback["available"] = False
-        fallback["fallback_reason"] = "AI provider unavailable — deterministic patterns above remain available."
+        fallback["fallback_reason"] = "AI provider unavailable — deterministic pattern facts above remain available."
         return fallback
 
-    # Construct prompt with verified facts only
-    verified_facts_str = "\n".join(patterns.get("verified_patterns", []))
-    type_breakdown = ", ".join(f"{t}: {c}" for t, c in patterns.get("grouped_by_type", {}).items())
-    
+    verified_facts_str = "\n".join(verified_facts)
+    type_breakdown_str = ", ".join(f"{t}: {c}" for t, c in type_breakdown.items()) or "None"
     prompt = f"""
 You are FinanceOS, an AI investigation assistant.
-Your task: Synthesize verified cross-exception patterns into operational recommendations.
+Your job is to analyze multiple verified exception records together and prioritize investigation work.
 
 CRITICAL SAFETY RULES:
-1. ONLY state facts from VERIFIED PATTERNS below.
-2. CLEARLY LABEL any hypothesis as "POSSIBLE HYPOTHESIS" or "OBSERVED PATTERN".
-3. Never invent exception IDs, order IDs, or amounts.
-4. Do NOT change any reconciliation decision.
-5. Do NOT claim to know root cause unless verified.
-6. Return valid JSON with keys: summary, cross_record_patterns, possible_operational_causes, recommended_next_action, confidence_in_explanation, limitations
+1. Only use facts present in the verified data below.
+2. Keep all hypotheses clearly labeled as "POSSIBLE HYPOTHESIS:".
+3. Keep all observed patterns clearly labeled as "OBSERVED PATTERN:".
+4. Never invent IDs, amounts, or evidence.
+5. Never change any reconciliation decision.
+6. Never claim a hypothesis is a fact.
+7. Return valid JSON with keys: summary, verified_facts, observed_patterns, possible_hypotheses, priority_assessment, recommended_actions, limitations, activity_trace.
 
-VERIFIED PATTERNS (FACTS):
+VERIFIED FACTS:
 {verified_facts_str}
 
 VERIFIED BREAKDOWN:
 - Total exceptions: {patterns.get('total_exceptions', 0)}
-- Exception types: {type_breakdown}
+- Exception types: {type_breakdown_str}
 - Related orders affected: {len(patterns.get('related_orders', []))}
-- Amount discrepancies found: {len(patterns.get('amount_anomalies', []))}
+- Amount discrepancies found: {len(amount_anomalies)}
+- Batches affected: {patterns.get('grouped_by_batch', {})}
 
-Synthesize these verified facts into an operational summary. If insufficient data for conclusion, say so.
-
-Return JSON only.
+Return only JSON.
 """
 
     try:
         response = llm.invoke(prompt)
-        content = str(response.content).strip()
+        content = str(getattr(response, "content", response)).strip()
         if content.startswith("```json"):
             content = content.replace("```json", "").replace("```", "").strip()
         parsed = json.loads(content)
-        
-        # Validate against fallback structure
-        result = {
-            "available": True,
-            "summary": str(parsed.get("summary", fallback["summary"])),
-            "cross_record_patterns": [
-                str(p) for p in (parsed.get("cross_record_patterns") or fallback["cross_record_patterns"])
-            ],
-            "possible_operational_causes": [
-                str(p) for p in (parsed.get("possible_operational_causes") or fallback["possible_operational_causes"])
-            ],
-            "recommended_next_action": str(parsed.get("recommended_next_action", fallback["recommended_next_action"])),
-            "confidence_in_explanation": str(parsed.get("confidence_in_explanation", "MEDIUM")),
-            "limitations": [
-                str(l) for l in (parsed.get("limitations") or fallback["limitations"])
-            ],
-        }
-        return result
+        validated = _validate_cross_exception_analysis(
+            parsed,
+            fallback,
+        )
+        validated["available"] = True
+        return validated
     except Exception as err:
         logger.warning("Failed to parse cross-exception pattern synthesis: %s", err)
         fallback["available"] = True
-        fallback["fallback_reason"] = "AI synthesis not available; deterministic patterns above are valid."
+        fallback["fallback_reason"] = "AI synthesis not available; deterministic patterns above remain valid."
         return fallback
+
+
+def build_cross_exception_analysis(incidents: list[dict] | None = None) -> dict:
+    """Build a strict, read-only cross-exception analysis from verified incident data."""
+    source_incidents = incidents if incidents is not None else get_priority_incidents_tool()
+    if not source_incidents:
+        return {
+            "available": True,
+            "summary": "No exception patterns to analyze.",
+            "verified_facts": [],
+            "observed_patterns": [],
+            "possible_hypotheses": [],
+            "priority_assessment": {"priority": "LOW", "reason": "No unresolved exceptions were detected in the current batch."},
+            "recommended_actions": ["Continue routine monitoring."],
+            "limitations": ["No exceptions detected in current batch."],
+            "activity_trace": [
+                "Loaded verified exception records.",
+                "Grouped records by exception type and settlement batch.",
+                "No recurring batch clusters were found.",
+                "Generated a no-op grounded investigation summary.",
+            ],
+        }
+    pattern_data = analyze_batch_exceptions()
+    return explain_cross_exception_patterns(pattern_data)
 
 
 def investigate_and_explain_highest_priority():

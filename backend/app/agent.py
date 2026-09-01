@@ -705,9 +705,55 @@ def ask_finance_agent(question: str) -> dict[str, Any]:
             "details": [d.model_dump(mode="json") for d in escalated_decisions],
         }
 
-    # 6. Broad Operational Queries (Summary, biggest issues, operator attention)
+    # 6. Pattern-level investigation queries
+    pattern_query = any(k in q_lower for k in (
+        "patterns across the exceptions",
+        "what is the biggest operational risk in this batch",
+        "which exceptions should finance investigate first",
+        "do these discrepancies appear related",
+        "what is the likely operational issue affecting the most records",
+        "related exceptions",
+        "cross-exception",
+        "exception patterns"
+    ))
+
+    if pattern_query and rec_result.exceptions:
+        from app.investigation import explain_cross_exception_patterns, analyze_batch_exceptions
+        pattern_data = analyze_batch_exceptions()
+        batch_analysis = explain_cross_exception_patterns(pattern_data)
+        summary_lines = [
+            "AI Cross-Exception Investigation",
+            f"Priority: {batch_analysis.get('priority_assessment', {}).get('priority', 'MEDIUM')}",
+            f"Reason: {batch_analysis.get('priority_assessment', {}).get('reason', 'Batch pattern review completed.')}",
+            "",
+            "Verified Facts",
+        ]
+        for fact in batch_analysis.get("verified_facts", [])[:5]:
+            summary_lines.append(f"• {fact}")
+        summary_lines.extend(["", "Observed Patterns"])
+        for pattern in batch_analysis.get("observed_patterns", [])[:5]:
+            summary_lines.append(f"• {pattern}")
+        summary_lines.extend(["", "Possible Hypotheses"])
+        for h in batch_analysis.get("possible_hypotheses", [])[:5]:
+            summary_lines.append(f"• {h}")
+        summary_lines.extend(["", "Recommended Next Actions"])
+        for act in batch_analysis.get("recommended_actions", [])[:5]:
+            summary_lines.append(f"• {act}")
+        summary_lines.extend(["", "Limitations"])
+        for limit in batch_analysis.get("limitations", [])[:3]:
+            summary_lines.append(f"• {limit}")
+        ans = "\n".join(summary_lines)
+        return {
+            "question": question,
+            "answer": ans,
+            "evidence_verified": True,
+            "type": "CROSS_EXCEPTION_ANALYSIS",
+            "details": batch_analysis,
+        }
+
+    # 7. Broad Operational Queries (Summary, biggest issues, operator attention)
     if any(k in q_lower for k in (
-        "biggest issue", "main issue", "requires attention", "operator attention",
+        "biggest issue", "biggest issues", "main issue", "requires attention", "operator attention",
         "operational summary", "batch summary", "summary of this run", "overview of this run",
         "how did reconciliation go", "what needs attention", "summary of the batch", "biggest problem"
     )):
@@ -720,7 +766,7 @@ def ask_finance_agent(question: str) -> dict[str, Any]:
             "details": summary_details,
         }
 
-    # 7. Ingestion Summary Query
+    # 8. Ingestion Summary Query
     if any(k in q_lower for k in ("ingest", "ingested", "ignored", "usable records", "columns ignored", "unprocessable")):
         summary = get_current_ingestion_summary()
         if not summary:
@@ -746,7 +792,7 @@ def ask_finance_agent(question: str) -> dict[str, Any]:
             "details": summary.model_dump(mode="json"),
         }
 
-    # 8. Amount Mismatches Query
+    # 10. Amount Mismatches Query
     if "amount mismatch" in q_lower or "mismatches" in q_lower:
         mismatches = [
             d for d in rec_result.decisions 
@@ -766,7 +812,7 @@ def ask_finance_agent(question: str) -> dict[str, Any]:
             "details": [m.model_dump(mode="json") for m in mismatches],
         }
 
-    # 9. Settlement Batch Integrity Query
+    # 11. Settlement Batch Integrity Query
     if any(k in q_lower for k in ("settlement batch", "batch integrity", "failed batch", "batch fail")):
         batch_exceptions = [
             e for e in rec_result.exceptions 
@@ -787,7 +833,7 @@ def ask_finance_agent(question: str) -> dict[str, Any]:
             "details": [e.model_dump(mode="json") for e in batch_exceptions],
         }
 
-    # 10. Fallback to Agent Controller Reasoning
+    # 12. Fallback to Agent Controller Reasoning
     controller_resp = run_controller_agent(question)
     controller = controller_resp.controller
     findings_str = "; ".join(controller.findings) if controller.findings else ""
@@ -905,6 +951,12 @@ def run_batch_controller() -> BatchControllerReport:
     else:
         event("COMPLETED", "Completed batch with no unresolved incidents.")
 
+    cross_exception_analysis = None
+    if priority:
+        from app.investigation import analyze_batch_exceptions, explain_cross_exception_patterns
+        pattern_data = analyze_batch_exceptions()
+        cross_exception_analysis = explain_cross_exception_patterns(pattern_data)
+
     total_seconds = perf_counter() - started
     rec_result = get_reconciliation_result()
     records_processed = rec_result.records_processed
@@ -946,4 +998,5 @@ def run_batch_controller() -> BatchControllerReport:
         financial_action_taken=False,
         is_custom_batch=is_custom_upload(),
         ingestion_summary=get_current_ingestion_summary().model_dump(mode="json") if get_current_ingestion_summary() else None,
+        cross_exception_analysis=cross_exception_analysis,
     )

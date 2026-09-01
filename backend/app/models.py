@@ -104,6 +104,7 @@ class BatchControllerReport(BaseModel):
     financial_action_taken: bool = False
     is_custom_batch: bool = False
     ingestion_summary: dict[str, Any] | None = None
+    cross_exception_analysis: dict[str, Any] | None = None
     evaluation: EvaluationMetrics | None = None
 
 
