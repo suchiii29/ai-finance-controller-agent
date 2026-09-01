@@ -9,7 +9,7 @@
 ## 🚀 Submission Links
 
 ### 🌐 Live Demo
-**[Open the Deployed FinanceOS Application](https://ai-finance-controller-agent.vercel.app/)**
+https://ai-finance-controller-agent.vercel.app/
 
 ### 🎥 Demo Video
 **[Watch the FinanceOS Demo Video](YOUR_VIDEO_LINK_HERE)**
