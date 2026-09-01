@@ -22,7 +22,10 @@ from app.report_generator import generate_html_report
 
 app = FastAPI(title="FinanceOS — AI Finance Controller")
 
-cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
+cors_origins_env = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:5173,http://localhost:3000,https://ai-finance-controller-agent.vercel.app",
+)
 origins = [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
 if "*" in origins:
     origins = ["*"]
@@ -52,6 +55,7 @@ class ControllerRequest(BaseModel):
 
 
 @app.get("/health")
+@app.get("/api/health")
 def health():
     return {"status": "ok"}
 

@@ -342,6 +342,19 @@ def run_reconciliation(orders, txns, settlements):
                 ]
             )
 
+        candidate_malformed = any(
+            validation_status.get(id(candidate)) == "MALFORMED"
+            for candidate in order_candidates
+        )
+        malformed_source_type = next(
+            (
+                validation_exception_type.get(id(candidate), ExceptionType.MALFORMED_VALUE)
+                for candidate in order_candidates
+                if validation_status.get(id(candidate)) == "MALFORMED"
+            ),
+            None,
+        )
+
         # --------------------------------------------------------
         # RULE 1 — Unresolved batch block
         # --------------------------------------------------------
@@ -365,6 +378,19 @@ def run_reconciliation(orders, txns, settlements):
             exception_type = ExceptionType.MISSING_COUNTERPART
             reason = "No gateway transaction links to this order."
             rule_id = "R2"
+
+        # --------------------------------------------------------
+        # RULE 4 — Malformed transaction (highest precedence within candidate set)
+        # --------------------------------------------------------
+        elif candidate_malformed:
+            exception_type = (
+                ExceptionType.UNFLAGGED_NEGATIVE_AMOUNT
+                if malformed_source_type == ExceptionType.UNFLAGGED_NEGATIVE_AMOUNT
+                else ExceptionType.MALFORMED_VALUE
+            )
+            decision = Decision.EXCEPTION
+            reason = "Linked transaction failed ingestion validation."
+            rule_id = "R4"
 
         # --------------------------------------------------------
         # RULE 3 — Duplicate charge

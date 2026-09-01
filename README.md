@@ -2,7 +2,7 @@
 
 > **Razorpay AI Buildathon 2026 · Track 04: AI Finance Controller**
 
-**FinanceOS is an AI-powered financial reconciliation agent that connects orders, payment gateway transactions, and bank settlements into a unified, auditable operations workflow. It automatically resolves safe financial matches using a deterministic rule engine while employing a bounded AI investigation agent to analyze verified evidence for exceptions. By separating financial decision authority from probabilistic reasoning, FinanceOS delivers 100% precision and verifiable audit trails for automated financial operations.**
+**FinanceOS is an AI-powered financial reconciliation agent that connects orders, payment gateway transactions, and bank settlements into a unified, auditable operations workflow. It automatically resolves safe financial matches using a deterministic rule engine while employing a bounded AI investigation agent to analyze verified evidence for exceptions. The system keeps financial decision authority in the deterministic engine and uses AI strictly for evidence-backed investigation and operator guidance.**
 
 ---
 
@@ -37,15 +37,14 @@ Results measured out-of-band against the canonical synthetic ground-truth datase
 
 | Metric | Measured Value | Meaning |
 |---|---|---|
-| **Precision** | **100.0%** | Zero false-positive auto-resolutions |
-| **Recall** | **100.0%** | 100% of safely reconcilable cases captured |
-| **F1 Score** | **100.0%** | Harmonic mean of precision and recall |
+| **Synthetic Precision** | **100.0%** | Synthetic benchmark rule-consistency metric for the demo dataset |
+| **Synthetic Recall** | **100.0%** | Synthetic benchmark rule-consistency metric for the demo dataset |
+| **Synthetic F1 Score** | **100.0%** | Synthetic benchmark rule-consistency metric for the demo dataset |
 | **Safe Resolution Rate** | **63.3%** | 38 of 60 orders safely auto-reconciled |
 | **Escalated Orders** | **22** | Ambiguous cases escalated to human review |
-| **Total Test Suite** | **29 / 29 passing** | 100% test coverage across backend & agent flows |
 | **Benchmark Dataset** | **139 records** | 60 Orders, 63 Gateway Txns, 16 Bank Settlements |
 
-*Note: Ground-truth benchmark metrics are evaluated out-of-band. The Safe Resolution Rate (63.3%) reflects strict financial safety—refusing to guess on ambiguous records.*
+*Note: Ground-truth benchmark metrics are evaluated out-of-band against the synthetic benchmark generated from the deterministic reconciliation rules. They validate rule consistency on that benchmark and do not demonstrate real-world generalization.*
 
 ---
 
@@ -198,9 +197,9 @@ If a bank credit discrepancy cannot be isolated to a specific transaction, Finan
 
 Ground-truth evaluation is performed **out-of-band** against the canonical synthetic benchmark (60 orders / 139 records):
 
-- **Precision (100.0%):** Zero false-positive auto-resolutions. Every auto-reconciled order is verifiably correct.
-- **Recall (100.0%):** Captured 100% of genuinely resolvable orders in the benchmark.
-- **F1 Score (100.0%):** Perfect balance of precision and recall.
+- **Synthetic Precision (100.0%):** Synthetic benchmark rule-consistency metric for the demo dataset; it validates deterministic consistency, not real-world generalization.
+- **Synthetic Recall (100.0%):** Synthetic benchmark rule-consistency metric for the demo dataset; it validates deterministic consistency, not real-world generalization.
+- **Synthetic F1 Score (100.0%):** Synthetic benchmark rule-consistency metric for the demo dataset; it validates deterministic consistency, not real-world generalization.
 - **Safe Resolution Rate (63.3%):** 38 of 60 orders safely reconciled; 22 intentionally escalated due to complex anomalies.
 
 ---

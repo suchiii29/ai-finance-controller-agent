@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_URL = import.meta.env.VITE_API_URL?.trim() || "";
 
 interface EvaluationMetrics {
   total_cases_evaluated: number;
@@ -71,6 +71,7 @@ function App() {
   const [askQuestion, setAskQuestion] = useState("");
   const [askLoading, setAskLoading] = useState(false);
   const [askResponse, setAskResponse] = useState<any | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
 
   // Upload Batch Modal state
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -78,10 +79,15 @@ function App() {
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   const runDemoBatch = async () => {
+    if (!API_URL) {
+      setApiError("FinanceOS backend is currently unavailable. Please retry shortly.");
+      return;
+    }
+
     setSelectedException(null);
     setLoading(true);
+    setApiError(null);
     setProcessingStage("Loading synthetic financial dataset...");
-
 
     try {
       setProcessingStage("Executing deterministic rule engine...");
@@ -90,6 +96,9 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ instruction: "Process synthetic demo batch" }),
       });
+      if (!recRes.ok) {
+        throw new Error(`Reconciliation request failed: ${recRes.status}`);
+      }
       const recJson = await recRes.json();
       setReconcileResult(recJson.result);
 
@@ -98,12 +107,15 @@ function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
+      if (!ctrlRes.ok) {
+        throw new Error(`Controller request failed: ${ctrlRes.status}`);
+      }
       const ctrlJson = await ctrlRes.json();
       setBatchData(ctrlJson);
       setAskResponse(null);
     } catch (err) {
       console.error(err);
-      alert("Failed to connect to backend server at " + API_URL);
+      setApiError("FinanceOS backend is currently unavailable. Please retry shortly.");
     } finally {
       setLoading(false);
       setProcessingStage("");
@@ -112,6 +124,10 @@ function App() {
 
   const handleUploadBatch = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!API_URL) {
+      setApiError("FinanceOS backend is currently unavailable. Please retry shortly.");
+      return;
+    }
     if (!uploadFiles || uploadFiles.length === 0) {
       setUploadError("Please select at least one CSV file to upload.");
       return;
@@ -119,6 +135,7 @@ function App() {
 
     setSelectedException(null);
     setUploadError(null);
+    setApiError(null);
     setLoading(true);
 
     setProcessingStage("Parsing & classifying uploaded CSV financial records...");
@@ -133,6 +150,11 @@ function App() {
         method: "POST",
         body: formData,
       });
+
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error(typeof json.detail === "object" ? json.detail.error : json.detail || "Upload failed");
+      }
 
       const json = await res.json();
 
@@ -150,7 +172,9 @@ function App() {
       setAskResponse(null);
     } catch (err) {
       console.error(err);
-      setUploadError("Network or server error uploading CSV batch.");
+      const msg = err instanceof Error ? err.message : "Network or server error uploading CSV batch.";
+      setUploadError(msg);
+      setApiError("FinanceOS backend is currently unavailable. Please retry shortly.");
     } finally {
       setLoading(false);
       setProcessingStage("");
@@ -160,19 +184,29 @@ function App() {
   const handleAskQuestion = async (queryToAsk?: string) => {
     const questionText = queryToAsk || askQuestion;
     if (!questionText.trim()) return;
+    if (!API_URL) {
+      setApiError("FinanceOS backend is currently unavailable. Please retry shortly.");
+      setAskResponse({ answer: "FinanceOS backend is currently unavailable. Please retry shortly." });
+      return;
+    }
 
     setAskLoading(true);
+    setApiError(null);
     try {
       const res = await fetch(`${API_URL}/api/ask`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: questionText }),
       });
+      if (!res.ok) {
+        throw new Error(`Ask request failed: ${res.status}`);
+      }
       const json = await res.json();
       setAskResponse(json.response);
     } catch (err) {
       console.error(err);
-      setAskResponse({ answer: "Failed to connect to Ask FinanceOS agent." });
+      setApiError("FinanceOS backend is currently unavailable. Please retry shortly.");
+      setAskResponse({ answer: "FinanceOS backend is currently unavailable. Please retry shortly." });
     } finally {
       setAskLoading(false);
     }
@@ -419,6 +453,11 @@ function App() {
       <main className="main-wrapper">
         {/* HEADER */}
         <header className="header">
+          {apiError && (
+            <div className="callout-box warning-box" style={{ marginBottom: "12px", width: "100%" }}>
+              <strong>FinanceOS backend is currently unavailable. Please retry shortly.</strong>
+            </div>
+          )}
           <div>
             <h1 className="page-title">Financial Reconciliation & Operations</h1>
             <p className="page-subtitle">
@@ -562,7 +601,7 @@ function App() {
               <div className="metric-card">
                 <span className="metric-label">ENGINE THROUGHPUT</span>
                 <span className="metric-number text-blue">{recordsPerSec}</span>
-                <span className="metric-sub">records / second measured</span>
+                <span className="metric-sub">synthetic benchmark throughput</span>
               </div>
             </div>
 
@@ -910,14 +949,14 @@ function App() {
                 <div>
                   <h3 className="section-heading">Ground-Truth Benchmark Evaluation</h3>
                   <p className="section-sub">
-                    Isolated quantitative benchmark metrics comparing reconciliation output against known ground truth.
+                    Synthetic benchmark rule-consistency metrics comparing reconciliation output against known ground truth for the demo dataset.
                   </p>
                 </div>
               </div>
 
               <div className="metrics-grid">
                 <div className="metric-card">
-                  <span className="metric-label">PRECISION</span>
+                  <span className="metric-label">SYNTHETIC PRECISION</span>
                   <span className={`metric-number ${batchData?.evaluation ? "text-green" : ""}`} style={!batchData?.evaluation ? { color: "var(--text-muted)" } : {}}>
                     {batchData?.evaluation ? `${(batchData.evaluation.precision * 100).toFixed(1)}%` : "N/A"}
                   </span>
@@ -927,7 +966,7 @@ function App() {
                 </div>
 
                 <div className="metric-card">
-                  <span className="metric-label">RECALL</span>
+                  <span className="metric-label">SYNTHETIC RECALL</span>
                   <span className={`metric-number ${batchData?.evaluation ? "text-blue" : ""}`} style={!batchData?.evaluation ? { color: "var(--text-muted)" } : {}}>
                     {batchData?.evaluation ? `${(batchData.evaluation.recall * 100).toFixed(1)}%` : "N/A"}
                   </span>
@@ -937,7 +976,7 @@ function App() {
                 </div>
 
                 <div className="metric-card">
-                  <span className="metric-label">F1 SCORE</span>
+                  <span className="metric-label">SYNTHETIC F1 SCORE</span>
                   <span className={`metric-number ${batchData?.evaluation ? "text-navy" : ""}`} style={!batchData?.evaluation ? { color: "var(--text-muted)" } : {}}>
                     {batchData?.evaluation ? `${(batchData.evaluation.f1 * 100).toFixed(1)}%` : "N/A"}
                   </span>
@@ -959,7 +998,7 @@ function App() {
                 </div>
 
                 <div className="metric-card">
-                  <span className="metric-label">ESCALATION ACCURACY</span>
+                  <span className="metric-label">SYNTHETIC ESCALATION ACCURACY</span>
                   <span className={`metric-number ${batchData?.evaluation ? "text-purple" : ""}`} style={!batchData?.evaluation ? { color: "var(--text-muted)" } : {}}>
                     {batchData?.evaluation ? `${(batchData.evaluation.exception_escalation_accuracy * 100).toFixed(1)}%` : "N/A"}
                   </span>
