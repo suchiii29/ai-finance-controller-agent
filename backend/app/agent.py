@@ -410,8 +410,8 @@ def ask_finance_agent(question: str) -> dict[str, Any]:
                 break
         
         if not failed_txn_id:
-            escalated_decisions = [d for d in rec_result.decisions if d.decision.value == "ESCALATED"]
-            for d in escalated_decisions:
+            exception_decisions = [d for d in rec_result.decisions if d.decision.value == "EXCEPTION"]
+            for d in exception_decisions:
                 for ev in d.evidence:
                     if ev.startswith("txn_id="):
                         failed_txn_id = ev.split("=")[1]
@@ -670,8 +670,15 @@ def ask_finance_agent(question: str) -> dict[str, Any]:
         }
 
     # 5. Escalated / Attention Orders Query
-    if any(k in q_lower for k in ("which orders require", "orders requiring attention", "escalated orders list")):
-        escalated_decisions = [d for d in rec_result.decisions if d.decision.value == "ESCALATED"]
+    if any(k in q_lower for k in (
+        "show me all escalated orders",
+        "show escalated orders",
+        "which orders require",
+        "orders requiring attention",
+        "escalated orders list",
+        "escalated orders",
+    )):
+        escalated_decisions = [d for d in rec_result.decisions if d.decision.value == "EXCEPTION"]
         if not escalated_decisions:
             ans = "No orders currently require operator attention. All orders in this batch are safely reconciled."
         else:

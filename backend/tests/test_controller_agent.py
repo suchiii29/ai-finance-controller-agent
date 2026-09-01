@@ -125,6 +125,18 @@ def test_llm_failure_returns_honest_fallback(monkeypatch):
     assert any("failed safely" in item for item in response.activity_trace)
 
 
+def test_ask_financeos_escalated_orders_uses_exception_decisions():
+    from app.tools import set_demo_batch
+
+    set_demo_batch()
+    response = agent.ask_finance_agent("Show me all escalated orders")
+
+    assert response["evidence_verified"] is True
+    assert response["type"] == "ESCALATED_ORDERS"
+    assert "No orders currently require operator attention" not in response["answer"]
+    assert "Found" in response["answer"]
+
+
 def test_fake_model_can_choose_different_paths(monkeypatch):
     monkeypatch.setattr(
         agent,

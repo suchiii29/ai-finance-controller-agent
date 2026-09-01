@@ -146,6 +146,141 @@ def get_recommended_action_by_type(exc_type: str, refs: list[str]) -> str:
 # AI EXPLANATION LAYER
 # ============================================================
 
+def _parse_decimal_amount(raw_value):
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, (int, float)):
+        return float(raw_value)
+    text = str(raw_value).strip()
+    if not text:
+        return None
+    match = __import__("re").search(r"[-+]?\d[\d,]*\.?\d*", text)
+    if not match:
+        return None
+    cleaned = match.group(0).replace(",", "")
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def _structured_fallback_for_exception(incident: dict) -> dict:
+    exc_type = incident.get("type", "")
+    refs = incident.get("references", [])
+    default_rec = get_recommended_action_by_type(exc_type, refs)
+    verified_fields = incident.get("verified_fields") or {}
+
+    fact_entries = []
+    if isinstance(verified_fields, dict):
+        for key in [
+            "Order ID",
+            "Order Amount",
+            "Transaction ID",
+            "Transaction ID(s)",
+            "Settlement Batch",
+            "Settlement Amount",
+            "Gross Amount",
+            "Net Amount",
+            "Fee",
+            "Relevant Date",
+            "Value Date",
+        ]:
+            if key in verified_fields and verified_fields[key] not in (None, "", "Not available in uploaded data"):
+                fact_entries.append(f"{key}: {verified_fields[key]}")
+
+    if not fact_entries:
+        fact_entries = [incident.get("reason", "Exception surfaced by reconciliation engine")]
+
+    summary = incident.get("reason", "Exception surfaced by reconciliation engine")
+    if not summary.endswith("."):
+        summary = f"{summary}."
+
+    discrepancy_analysis = "No numeric discrepancy could be calculated from the available evidence."
+    order_amt = None
+    settlement_amt = None
+    if isinstance(verified_fields, dict):
+        order_amt = next(
+            (
+                _parse_decimal_amount(v)
+                for k, v in verified_fields.items()
+                if k.lower() in {"order amount", "order_amount", "gross amount", "gross_amount", "gateway amount"}
+            ),
+            None,
+        )
+        settlement_amt = next(
+            (
+                _parse_decimal_amount(v)
+                for k, v in verified_fields.items()
+                if k.lower() in {"settlement amount", "credited amount", "bank settlement", "bank settlement amount"}
+            ),
+            None,
+        )
+
+    if order_amt is not None and settlement_amt is not None:
+        difference = settlement_amt - order_amt
+        suffix = "excess" if difference > 0 else "shortfall"
+        discrepancy_analysis = (
+            f"The available evidence shows a {abs(difference):.2f} difference between the order and settlement values "
+            f"({suffix} relative to the order amount)."
+        )
+
+    escalation_reason = (
+        "Deterministic reconciliation rules blocked auto-reconciliation because the engine classified this "
+        "order as an EXCEPTION requiring operator review."
+    )
+    structured = {
+        "summary": summary,
+        "verified_facts": fact_entries[:5],
+        "discrepancy_analysis": discrepancy_analysis,
+        "possible_causes": [
+            "Possible explanation: an unlinked or mismatched settlement entry in the batch.",
+            "Possible explanation: a fee, adjustment, or duplicate amount not represented in the currently available records.",
+            "Possible explanation: insufficient evidence exists to attribute a single root cause without operator review.",
+        ],
+        "recommended_action": default_rec,
+        "escalation_reason": escalation_reason,
+        "available": False,
+        "fallback_reason": "AI provider unavailable — deterministic evidence remains available.",
+        "explanation": "AI investigation unavailable. Deterministic evidence remains available for operator review.",
+        "observed_facts": fact_entries[:5],
+        "why_escalated": escalation_reason,
+        "refusal_rationale": escalation_reason,
+        "suggested_action": default_rec,
+        "recommended_operator_action": default_rec,
+    }
+    return structured
+
+
+def _validate_structured_ai_output(raw_data: dict, fallback: dict) -> dict:
+    if not isinstance(raw_data, dict):
+        return fallback
+
+    validated = dict(fallback)
+    validated["summary"] = str(raw_data.get("summary") or raw_data.get("headline") or fallback["summary"])
+    validated["verified_facts"] = [
+        str(item) for item in (raw_data.get("verified_facts") or raw_data.get("observed_facts") or fallback["verified_facts"])
+    ]
+    validated["discrepancy_analysis"] = str(
+        raw_data.get("discrepancy_analysis") or raw_data.get("difference_analysis") or fallback["discrepancy_analysis"]
+    )
+    validated["possible_causes"] = [
+        str(item) for item in (raw_data.get("possible_causes") or fallback["possible_causes"])
+    ]
+    validated["recommended_action"] = str(
+        raw_data.get("recommended_action") or raw_data.get("suggested_action") or raw_data.get("recommended_operator_action") or fallback["recommended_action"]
+    )
+    validated["escalation_reason"] = str(
+        raw_data.get("escalation_reason") or raw_data.get("why_escalated") or raw_data.get("refusal_rationale") or fallback["escalation_reason"]
+    )
+    validated["available"] = True
+    validated["observed_facts"] = validated["verified_facts"]
+    validated["why_escalated"] = validated["escalation_reason"]
+    validated["refusal_rationale"] = validated["escalation_reason"]
+    validated["suggested_action"] = validated["recommended_action"]
+    validated["recommended_operator_action"] = validated["recommended_action"]
+    return validated
+
+
 def explain_exception_evidence(incident: dict) -> dict:
     """
     Produces a structured AI explanation for an exception based strictly on verified evidence.
@@ -154,45 +289,48 @@ def explain_exception_evidence(incident: dict) -> dict:
     exc_type = incident.get("type", "")
     refs = incident.get("references", [])
     default_rec = get_recommended_action_by_type(exc_type, refs)
+    fallback = _structured_fallback_for_exception(incident)
 
     llm = get_llm()
     if llm is None:
-        return {
-            "available": False,
-            "fallback_reason": "AI provider unavailable — deterministic evidence remains available.",
-            "explanation": "AI investigation unavailable. Please review deterministic evidence.",
-            "summary": incident.get("reason", "Exception surfaced by reconciliation engine"),
-            "observed_facts": [incident.get("reason", "Exception surfaced by reconciliation engine")],
-            "why_escalated": "Deterministic safety rule triggered.",
-            "refusal_rationale": "Deterministic safety rule triggered.",
-            "suggested_action": default_rec,
-            "recommended_operator_action": default_rec,
-        }
+        fallback["available"] = False
+        fallback["fallback_reason"] = "AI provider unavailable — deterministic evidence remains available."
+        return fallback
+
+    verified_fields = incident.get("verified_fields") or {}
+    issue_summary = incident.get("reason", "Exception surfaced by reconciliation engine")
+    order_amount = None
+    settlement_amount = None
+    if isinstance(verified_fields, dict):
+        order_amount = next((v for k, v in verified_fields.items() if k.lower() in {"order amount", "order_amount"}), None)
+        settlement_amount = next((v for k, v in verified_fields.items() if k.lower() in {"settlement amount", "settlement_amount", "bank settlement", "credited amount"}), None)
 
     prompt = f"""
-You are FinanceOS, an intelligent AI Finance Controller agent.
-You are given VERIFIED EVIDENCE for a financial exception that was escalated by a deterministic reconciliation engine.
+You are FinanceOS, an AI investigation assistant working alongside a deterministic reconciliation engine.
+Your task is to explain verified exception evidence without changing the financial decision.
 
 STRICT SAFETY RULES:
-1. State ONLY facts present in the provided evidence.
-2. DO NOT invent transaction IDs, amounts, order numbers, or root causes.
-3. DO NOT change or override the system's decision (it is ALWAYS an ESCALATED EXCEPTION).
-4. Clearly separate OBSERVED FACTS, REASON FOR ESCALATION, and RECOMMENDED HUMAN ACTION.
-5. If root cause is unclear, explicitly state: "Root cause cannot be confirmed from available evidence."
+1. Only state facts present in the provided evidence.
+2. Never invent transaction IDs, amounts, order numbers, or root causes.
+3. The deterministic engine decides the financial outcome; the AI explains and recommends investigation.
+4. Keep the response structured as JSON with these keys:
+   summary, verified_facts, discrepancy_analysis, possible_causes, recommended_action, escalation_reason
+5. Clearly separate verified facts from possible explanations.
+6. If the evidence is insufficient to prove a root cause, say so clearly.
+7. If a numerical discrepancy is available, calculate it explicitly and explain it.
 
 EXCEPTION DETAILS:
 Exception ID: {incident.get('exception_id')}
 Type: {incident.get('type')}
 Severity: {incident.get('severity')}
 Reason: {incident.get('reason')}
-References: {json.dumps(incident.get('references', []))}
-Affected Orders: {json.dumps(incident.get('affected_orders', []))}
+References: {json.dumps(incident.get('references', []), ensure_ascii=False)}
+Affected Orders: {json.dumps(incident.get('affected_orders', []), ensure_ascii=False)}
+Verified Fields: {json.dumps(verified_fields, ensure_ascii=False, default=str)}
+Order Amount: {order_amount}
+Settlement Amount: {settlement_amount}
 
-Provide a concise json response with keys:
-"summary": brief summary of the issue (1 sentence)
-"observed_facts": list of 2-3 bullet point strings of facts
-"why_escalated": 1 sentence explaining why auto-resolution was unsafe
-"suggested_action": 1 concise sentence recommending safe next step. Use wording like: "{default_rec}" if appropriate.
+Return valid JSON only.
 """
 
     try:
@@ -201,27 +339,15 @@ Provide a concise json response with keys:
         if content.startswith("```json"):
             content = content.replace("```json", "").replace("```", "").strip()
         parsed = json.loads(content)
-        why_esc = parsed.get("why_escalated", parsed.get("refusal_rationale", "Deterministic rules prevented auto-reconciliation."))
-        sug_act = parsed.get("suggested_action", parsed.get("recommended_operator_action", default_rec))
-        return {
-            "available": True,
-            "summary": parsed.get("summary", incident.get("reason")),
-            "observed_facts": parsed.get("observed_facts", [incident.get("reason")]),
-            "why_escalated": why_esc,
-            "refusal_rationale": why_esc,
-            "suggested_action": sug_act,
-            "recommended_operator_action": sug_act,
-        }
+        validated = _validate_structured_ai_output(parsed, fallback)
+        validated["available"] = True
+        return validated
     except Exception as err:
         logger.warning("Failed to parse LLM structured output for exception %s: %s", incident.get("exception_id"), err)
         return {
+            **fallback,
             "available": True,
-            "summary": incident.get("reason"),
-            "observed_facts": [incident.get("reason")],
-            "why_escalated": "Deterministic safety rule triggered.",
-            "refusal_rationale": "Deterministic safety rule triggered.",
-            "suggested_action": default_rec,
-            "recommended_operator_action": default_rec,
+            "fallback_reason": "AI output was not valid JSON — deterministic evidence remains available.",
         }
 
 
