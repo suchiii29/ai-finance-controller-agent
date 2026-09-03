@@ -14,7 +14,7 @@
 https://ai-finance-controller-agent.vercel.app/
 
 ### 🎥 Demo Video
-**Placeholder for the final demo video:** [Add FinanceOS demo video URL here once recorded]
+https://drive.google.com/file/d/1-NLcepd2p-9YwgRJyWNsE5NP1OGxebfS/view?usp=drivesdk
 
 ---
 
